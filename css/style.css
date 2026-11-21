@@ -58,11 +58,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
 #vehname { position: absolute; right: 24px; bottom: 110px; font-size: 26px; color: #9fd8ff; opacity: 0; transition: opacity .6s; }
 #speedo { position: absolute; left: 260px; bottom: 26px; font-size: 26px; }
 
-#bigmap { position: fixed; inset: 0; background: rgba(10,14,12,.96); display: flex; align-items: center; justify-content: center; }
+#bigmap { position: fixed; inset: 0; z-index: 10; background: rgba(10,14,12,.96); display: flex; align-items: center; justify-content: center; }
 #bigmapcanvas { max-width: 100%; max-height: 100%; }
 #bigmaphint { position: absolute; bottom: 10px; left: 0; right: 0; text-align: center; color: #aaa; font-size: 13px; }
 
-#menu { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at center, rgba(20,24,40,.78), rgba(0,0,0,.95)); padding: 16px; overflow: auto; }
+#menu { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at center, rgba(20,24,40,.78), rgba(0,0,0,.95)); padding: 16px; overflow: auto; }
 #menuinner { max-width: 640px; width: 100%; text-align: center; }
 #menu h1 { font-family: var(--hud-font); font-size: clamp(56px, 14vw, 120px); margin: 0; letter-spacing: 6px; color: #fff; text-shadow: 4px 4px 0 #c8102e, 8px 8px 0 #000; }
 #menu h2 { font-family: var(--hud-font); font-weight: normal; letter-spacing: 2px; color: var(--gold); margin: 6px 0 18px; font-size: clamp(18px, 4vw, 26px); }
@@ -79,3 +79,55 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color:
   #minimapwrap { width: 140px; height: 140px; }
   #topright { transform: scale(.8); transform-origin: top right; }
 }
+
+/* ---------- phones & tablets ---------- */
+#touchhelp { display: none; }
+#bigmapclose { position: absolute; top: 10px; right: 14px; width: 44px; height: 44px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.6); color: #fff; font-size: 28px; line-height: 1; cursor: pointer; }
+body.mobile { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
+body.mobile #controls { display: none; }
+body.mobile #touchhelp { display: block; text-align: left; margin: 18px auto 6px; max-width: 520px; font-size: 14px; color: #ddd; line-height: 1.5; }
+body.mobile #touchhelp b { color: #fff; }
+body.mobile #touchhelp .rot { display: none; color: var(--gold); margin-top: 8px; }
+@media (orientation: portrait) { body.mobile #touchhelp .rot { display: block; } }
+body.mobile #menu { align-items: flex-start; padding-top: max(16px, env(safe-area-inset-top)); }
+
+#touch { position: fixed; inset: 0; z-index: 5; touch-action: none; -webkit-tap-highlight-color: transparent; }
+#tjoy { position: absolute; width: 110px; height: 110px; border-radius: 50%; border: 3px solid rgba(255,255,255,.35); background: rgba(0,0,0,.18); opacity: 0; pointer-events: none; transition: opacity .1s; }
+#tjoy.on { opacity: 1; }
+#tknob { position: absolute; left: 30px; top: 30px; width: 50px; height: 50px; border-radius: 50%; background: rgba(255,255,255,.55); }
+.tb { position: absolute; width: 64px; height: 64px; border-radius: 50%; border: 3px solid rgba(255,255,255,.55); background: rgba(0,0,0,.35); color: #fff; font: 15px var(--hud-font); letter-spacing: 1px; padding: 0; touch-action: none; -webkit-tap-highlight-color: transparent; }
+.tb.down { background: rgba(255,255,255,.4); }
+.tb.lit { background: rgba(200,16,46,.7); border-color: #fff; }
+.tb.sm { width: 46px; height: 46px; font-size: 13px; }
+#tb-fire { width: 84px; height: 84px; right: calc(22px + env(safe-area-inset-right)); bottom: calc(26px + env(safe-area-inset-bottom)); background: rgba(200,16,46,.5); font-size: 18px; }
+#tb-aim { right: calc(118px + env(safe-area-inset-right)); bottom: calc(22px + env(safe-area-inset-bottom)); }
+#tb-jump { right: calc(34px + env(safe-area-inset-right)); bottom: calc(122px + env(safe-area-inset-bottom)); }
+#tb-car { right: calc(118px + env(safe-area-inset-right)); bottom: calc(100px + env(safe-area-inset-bottom)); background: rgba(40,90,200,.45); }
+#tb-wpn { right: calc(196px + env(safe-area-inset-right)); bottom: calc(30px + env(safe-area-inset-bottom)); }
+#tb-reload { right: calc(196px + env(safe-area-inset-right)); bottom: calc(86px + env(safe-area-inset-bottom)); }
+#tb-horn { right: calc(196px + env(safe-area-inset-right)); bottom: calc(86px + env(safe-area-inset-bottom)); display: none; }
+#touch.driving #tb-horn { display: block; }
+#touch.driving #tb-reload, #touch.driving #tb-aim { display: none; }
+.tb.top { top: calc(10px + env(safe-area-inset-top)); }
+#tb-map { left: calc(142px + env(safe-area-inset-left)); }
+#tb-pause { left: calc(196px + env(safe-area-inset-left)); }
+
+body.mobile #minimapwrap { left: calc(10px + env(safe-area-inset-left)); top: calc(10px + env(safe-area-inset-top)); bottom: auto; width: 120px; height: 120px; border-width: 3px; }
+body.mobile #minimap { width: 120px; height: 120px; }
+body.mobile #north { font-size: 12px; }
+body.mobile #topright { top: calc(6px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); transform: scale(.62); transform-origin: top right; }
+body.mobile #zone { left: 0; right: 0; bottom: auto; top: calc(8px + env(safe-area-inset-top)); text-align: center; pointer-events: none; }
+body.mobile #zonename { font-size: 20px; }
+body.mobile #streetname { font-size: 14px; }
+body.mobile #notify { left: 50%; transform: translateX(-50%); top: 62px; max-width: 60vw; }
+body.mobile #notify .n { font-size: 12px; padding: 5px 9px; }
+body.mobile #speedo { left: calc(140px + env(safe-area-inset-left)); bottom: auto; top: calc(62px + env(safe-area-inset-top)); font-size: 18px; }
+body.mobile #vehname { bottom: auto; top: 90px; font-size: 18px; }
+body.mobile #bigmsg { font-size: 56px; }
+body.mobile #bigmsg.good { font-size: 34px; }
+body.mobile #progress { top: 40%; }
+body.mobile #crosshair.small { opacity: .8; transform: scale(.7); }
+body.mobile #menu { touch-action: pan-y; }
+body.mobile #menu h1 { font-size: clamp(40px, 9vw, 72px); letter-spacing: 4px; }
+body.mobile #menu h2 { margin-bottom: 8px; font-size: 18px; }
+body.mobile #play { font-size: 26px; padding: 8px 44px; }

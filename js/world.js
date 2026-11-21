@@ -120,7 +120,7 @@ G.buildWorld = async (status) => {
   // ---------------- trees ----------------
   status('Planting trees…'); await tick();
   const trees = [];
-  const addTree = (x, z, s) => { if (trees.length < 9000) trees.push([x, z, s]); };
+  const addTree = (x, z, s) => { if (trees.length < (G.mobile ? 3500 : 9000)) trees.push([x, z, s]); };
   for (let i = 0; i < D.trees.length; i += 2) addTree(D.trees[i], D.trees[i + 1], G.rand(0.9, 1.4));
   for (const l of D.lines) if (l.k === 'treerow') {
     const p = l.p;
@@ -131,7 +131,7 @@ G.buildWorld = async (status) => {
   }
   const okTree = (x, z) => grid.get(x, z) === G.FREE && roadGrid.get(x, z) === 0;
   for (const a of D.areas) {
-    const spacing = a.k === 'wood' ? 8 : (a.k === 'park' || a.k === 'grass') ? 22 : a.k === 'scrub' ? 12 : 0;
+    const spacing = a.k === 'wood' ? (G.mobile ? 12 : 8) : (a.k === 'park' || a.k === 'grass') ? 22 : a.k === 'scrub' ? 12 : 0;
     if (!spacing) continue;
     const [x0, z0, x1, z1] = G.bbox(a.p);
     for (let x = x0; x < x1; x += spacing) for (let z = z0; z < z1; z += spacing) {
@@ -153,12 +153,12 @@ G.buildWorld = async (status) => {
 
   // ---------------- ground texture ----------------
   status('Painting the ground…'); await tick();
-  const S = 2; // px per metre
+  const S = G.mobile ? 1.25 : 2; // px per metre (phones: keep canvases under iOS size limits)
   const big = document.createElement('canvas'); big.width = Math.ceil(2 * HW * S); big.height = Math.ceil(2 * HH * S);
   const ctx = big.getContext('2d');
   ctx.fillStyle = '#6a9a46'; ctx.fillRect(0, 0, big.width, big.height);
   // speckle for texture
-  for (let i = 0; i < 90000; i++) { ctx.fillStyle = rnd() < 0.5 ? 'rgba(40,70,20,0.10)' : 'rgba(150,190,90,0.10)'; ctx.fillRect(rnd() * big.width, rnd() * big.height, 2 + rnd() * 5, 2 + rnd() * 5); }
+  for (let i = 0; i < (G.mobile ? 30000 : 90000); i++) { ctx.fillStyle = rnd() < 0.5 ? 'rgba(40,70,20,0.10)' : 'rgba(150,190,90,0.10)'; ctx.fillRect(rnd() * big.width, rnd() * big.height, 2 + rnd() * 5, 2 + rnd() * 5); }
   ctx.setTransform(S, 0, 0, S, HW * S, HH * S);
   const order = ['farm', 'grass', 'park', 'scrub', 'wood', 'yard', 'paved', 'parking', 'plaza', 'tank'];
   const drawArea = (a, col) => { ctx.beginPath(); ringPath(ctx, a.p); if (a.hl) for (const h of a.hl) ringPath(ctx, h); ctx.fillStyle = col; ctx.fill('evenodd'); };

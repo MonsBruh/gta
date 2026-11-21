@@ -5,6 +5,11 @@ const G = window.G = {
   actors: [], vehicles: [], pickups: [], time: 0,
 };
 
+{
+  const q = new URLSearchParams(location.search).get('touch');
+  const coarse = window.matchMedia && matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+  G.mobile = q === '1' ? true : q === '0' ? false : !!(coarse || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent));
+}
 G.rand = (a, b) => a + Math.random() * (b - a);
 G.randi = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
 G.pick = (arr) => arr[Math.floor(Math.random() * arr.length)];

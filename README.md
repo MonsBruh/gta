@@ -6,7 +6,15 @@ The map isn't hand-drawn. It's generated from **OpenStreetMap** data for the cam
 
 ## Play
 
-Open `index.html` in a desktop browser (Chrome, Edge or Firefox). No build step or server is needed. If your browser blocks local files, run `python3 -m http.server` in this folder and open <http://localhost:8000>.
+**Desktop:** open `index.html` in Chrome, Edge or Firefox. No build step or server is needed. If your browser blocks local files, run `python3 -m http.server` in this folder and open <http://localhost:8000>.
+
+**Phone or tablet:** open the GitHub Pages link (below) and turn the phone sideways. Touch controls switch on automatically: drag your left thumb for the joystick (push to the edge to sprint), drag your right thumb to look, and use the FIRE, AIM (with auto-aim), JUMP/BRAKE, CAR, WPN, R, MAP and II (pause) buttons. Phones get lighter graphics automatically. Add `?touch=1` or `?touch=0` to the URL to force touch controls on or off.
+
+### Hosting on GitHub Pages
+
+1. In the repo, go to **Settings → Pages**.
+2. Under **Build and deployment**, choose **Deploy from a branch**, pick the branch with this code and the **/(root)** folder, then click **Save**.
+3. After a minute or two the game is live at `https://<your-username>.github.io/gta/`. On a free account, the repo must be public.
 
 | Key | Action |
 | --- | --- |

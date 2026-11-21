@@ -4,18 +4,19 @@
 const V3 = THREE.Vector3;
 const $ = (id) => document.getElementById(id);
 const canvas = $('game');
-const renderer = G.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+const renderer = G.renderer = new THREE.WebGLRenderer({ canvas, antialias: !G.mobile, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, G.mobile ? 1.25 : 1.5));
+if (G.mobile) document.body.classList.add('mobile');
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = G.mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 const scene = G.scene = new THREE.Scene();
-const camera = G.camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.2, 1800);
+const camera = G.camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.2, G.mobile ? 900 : 1800);
 scene.fog = new THREE.Fog(0x9cc4e4, 180, 1000);
 scene.background = new THREE.Color(0x9cc4e4);
 const hemi = new THREE.HemisphereLight(0xcfe6ff, 0x4d5a3a, 0.9); scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff1d8, 2.2); sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048); const sc = sun.shadow.camera; sc.left = -75; sc.right = 75; sc.top = 75; sc.bottom = -75; sc.near = 10; sc.far = 400;
+const SHR = G.mobile ? 50 : 75; sun.shadow.mapSize.set(G.mobile ? 1024 : 2048, G.mobile ? 1024 : 2048); const sc = sun.shadow.camera; sc.left = -SHR; sc.right = SHR; sc.top = SHR; sc.bottom = -SHR; sc.near = 10; sc.far = 400;
 sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.04;
 scene.add(sun); scene.add(sun.target);
 window.addEventListener('resize', () => { renderer.setSize(window.innerWidth, window.innerHeight); camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); });
@@ -27,6 +28,7 @@ G.camDist = (p) => Math.hypot(camera.position.x - p.x, camera.position.z - p.z);
 G.shake = (a) => { G.cam.shake = Math.min(1.2, Math.max(G.cam.shake, a)); };
 
 // ---------------- input ----------------
+const lockPointer = () => { if (!G.mobile && canvas.requestPointerLock) canvas.requestPointerLock(); };
 const keys = {};
 G.input = { fwd: 0, right: 0, sprint: false, jump: false, aim: false, fire: false, car: { throttle: 0, steer: 0, handbrake: false } };
 let mouseL = false, mouseR = false, firePressed = false;
@@ -46,8 +48,8 @@ addEventListener('keydown', (e) => {
 });
 addEventListener('keyup', (e) => { keys[e.code] = false; });
 canvas.addEventListener('mousedown', (e) => {
-  if (!G.state.started) return;
-  if (document.pointerLockElement !== canvas) { canvas.requestPointerLock(); return; }
+  if (!G.state.started || G.mobile) return;
+  if (document.pointerLockElement !== canvas) { lockPointer(); return; }
   if (e.button === 0) { mouseL = true; firePressed = true; } if (e.button === 2) mouseR = true;
 });
 addEventListener('mouseup', (e) => { if (e.button === 0) mouseL = false; if (e.button === 2) mouseR = false; });
@@ -66,8 +68,8 @@ document.addEventListener('pointerlockchange', () => {
 function toggleMap() {
   G.state.map = !G.state.map;
   $('bigmap').classList.toggle('hidden', !G.state.map);
-  if (G.state.map) { G.state.paused = true; G.hud.drawBigMap(); document.exitPointerLock(); }
-  else { canvas.requestPointerLock(); }
+  if (G.state.map) { G.state.paused = true; G.hud.drawBigMap(); if (document.exitPointerLock) document.exitPointerLock(); }
+  else if (G.mobile) { G.state.paused = false; } else { lockPointer(); }
 }
 $('bigmap').addEventListener('keydown', () => {});
 addEventListener('keydown', (e) => { if (e.code === 'Escape' && G.state.map) toggleMap(); });
@@ -97,7 +99,9 @@ function readInput() {
   const k = (c) => (keys[c] ? 1 : 0); const inp = G.input;
   inp.fwd = k('KeyW') + k('ArrowUp') - k('KeyS') - k('ArrowDown');
   inp.right = k('KeyD') + k('ArrowRight') - k('KeyA') - k('ArrowLeft');
-  inp.sprint = !!(keys.ShiftLeft || keys.ShiftRight); inp.jump = !!keys.Space; inp.aim = mouseR;
+  const t = G.touchMove;
+  if (t) { inp.fwd = G.clamp(inp.fwd - t.y, -1, 1); inp.right = G.clamp(inp.right + t.x, -1, 1); }
+  inp.sprint = !!(keys.ShiftLeft || keys.ShiftRight || (t && t.sprint)); inp.jump = !!keys.Space; inp.aim = mouseR;
   inp.car.throttle = inp.fwd; inp.car.steer = -inp.right; inp.car.handbrake = !!keys.Space;
 }
 
@@ -105,7 +109,7 @@ function readInput() {
 const SKY_DAY = new THREE.Color(0x9cc4e4), SKY_NIGHT = new THREE.Color(0x0a0f1e), SKY_DUSK = new THREE.Color(0xe39a6a), SKY_RAIN = new THREE.Color(0x8a939c);
 let rain = null, rainOn = false, rainK = 0, weatherT = 90;
 function makeRain() {
-  const N = 2500, pos = new Float32Array(N * 6);
+  const N = G.mobile ? 900 : 2500, pos = new Float32Array(N * 6);
   const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   rain = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xaab8c8, transparent: true, opacity: 0.45 }));
   rain.frustumCulled = false; rain.userData.drops = Array.from({ length: N }, () => [G.rand(-40, 40), G.rand(0, 30), G.rand(-40, 40)]);
@@ -120,7 +124,7 @@ function updateWorldTime(dt) {
   const day = G.clamp(alt * 3, 0, 1), dusk = G.clamp(1 - Math.abs(alt) * 4, 0, 1);
   const sky = SKY_NIGHT.clone().lerp(SKY_DAY, day).lerp(SKY_DUSK, dusk * 0.5).lerp(SKY_RAIN.clone().multiplyScalar(0.3 + day * 0.7), rainK * 0.7);
   scene.background.copy(sky); scene.fog.color.copy(sky);
-  scene.fog.far = G.lerp(1000, 380, rainK); scene.fog.near = G.lerp(180, 60, rainK);
+  scene.fog.far = G.lerp(G.mobile ? 650 : 1000, 380, rainK); scene.fog.near = G.lerp(180, 60, rainK);
   sun.intensity = (0.15 + 2.1 * day) * (1 - rainK * 0.6); hemi.intensity = (0.38 + 0.6 * day) * (1 - rainK * 0.3) + 0.05;
   sun.color.setHSL(0.1, 0.6, G.lerp(0.75, 0.9, day));
   const ang = (c.hour - 6) / 12 * Math.PI;
@@ -211,7 +215,11 @@ async function boot() {
 $('play').addEventListener('click', () => {
   G.audio.init();
   if (!G.state.started) { G.state.started = true; $('hud').classList.remove('hidden'); G.hud.notify('Welcome to Bailrigg. You start in Alexandra Square.'); G.hud.notify('F to steal a car. Find guns around campus (white dots on the map).'); }
-  canvas.requestPointerLock();
+  lockPointer();
+  if (G.mobile) {
+    const el = document.documentElement; const fs = el.requestFullscreen || el.webkitRequestFullscreen;
+    try { const pr = fs && fs.call(el); if (pr && pr.then) pr.then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {})).catch(() => {}); } catch (e) { /* iPhone Safari has no fullscreen */ }
+  }
   G.state.paused = false; $('menu').classList.add('hidden');
 });
 
@@ -219,7 +227,8 @@ let last = performance.now(), popT = 0, labelT = 0;
 function loop(now) {
   requestAnimationFrame(loop);
   let dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (!G.state.started || G.state.paused) { if (G.player) { updateCamera(0); } renderer.render(scene, camera); return; }
+  if (!G.state.started || G.state.paused) { if (G.touchUpdate) G.touchUpdate(0); if (G.player) { updateCamera(0); } renderer.render(scene, camera); return; }
+  if (G.touchUpdate) G.touchUpdate(dt);
   readInput();
   update(dt);
   G.hud.update(dt);
@@ -255,6 +264,8 @@ function update(dt) {
   G.audio.update({ engineOn: !!pl.vehicle && !pl.vehicle.dead, engineSpeed: pl.vehicle ? pl.vehicle.speed : 0, throttle: pl.vehicle && G.input.car.throttle !== 0, sirenDist });
 }
 G._update = update; G._readInput = readInput; G._enterExit = enterExit;
-G._debug = { keys, get mouse() { return { mouseL, mouseR }; }, setFire(v) { mouseL = v; firePressed = v; }, setAim(v) { mouseR = v; } };
+G._debug = { keys, get mouse() { return { mouseL, mouseR }; }, setFire(v) { mouseL = v; if (v) firePressed = true; }, setAim(v) { mouseR = v; } };
+G._cycleWeapon = (d) => cycleWeapon(d); G._toggleMap = () => toggleMap();
+G._pause = () => { G.state.paused = true; $('menu').classList.remove('hidden'); $('play').textContent = 'RESUME'; };
 boot();
 })();

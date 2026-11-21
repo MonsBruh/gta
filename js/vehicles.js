@@ -369,7 +369,7 @@ G.populateTraffic = () => {
     if (d > lim) { v.remove(); G.vehicles.splice(i, 1); if (v.lot) { v.lot.cars = v.lot.cars.filter((c) => c !== v); } }
   }
   let moving = 0, bus = 0; for (const v of G.vehicles) { if (v.ai && v.ai.mode === 'cruise' && v.driver) moving++; if (v.type === 'bus') bus++; }
-  const want = G.clock.night ? 7 : 14;
+  const want = (G.clock.night ? 7 : 14) * (G.mobile ? 0.6 : 1);
   let tries = 0;
   while (moving < want && tries++ < 10) {
     const nodes = G.roadGraph.buckets.near(px, pz, 220); if (!nodes.length) break;

@@ -262,7 +262,7 @@ G.panic = (x, z, r, chance = 0.8) => {
     }
   }
 };
-const MAX_PEDS = 46;
+const MAX_PEDS = G.mobile ? 26 : 46;
 G.populatePeds = () => {
   const pl = G.player; const px = pl.pos.x, pz = pl.pos.z;
   // despawn far / long dead
