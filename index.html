@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bailrigg: Campus Crime</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="topright">
+    <div id="clock">10:00</div>
+    <div id="weaponbox"><div id="weaponname">FISTS</div><div id="ammo"></div></div>
+    <div id="money">$00000000</div>
+    <div class="bar"><div id="hpbar"></div></div>
+    <div class="bar armor"><div id="arbar"></div></div>
+    <div id="stars"></div>
+  </div>
+  <div id="minimapwrap"><canvas id="minimap" width="220" height="220"></canvas><div id="north">N</div></div>
+  <div id="zone"><div id="zonename"></div><div id="streetname"></div></div>
+  <div id="crosshair"></div>
+  <div id="notify"></div>
+  <div id="bigmsg"></div>
+  <div id="progress"><div id="progressfill"></div><span id="progresslabel"></span></div>
+  <div id="vehname"></div>
+  <div id="speedo"></div>
+</div>
+
+<div id="bigmap" class="hidden"><canvas id="bigmapcanvas"></canvas><div id="bigmaphint">M / Esc to close &middot; Map data &copy; OpenStreetMap contributors</div></div>
+
+<div id="menu">
+  <div id="menuinner">
+    <h1>BAILRIGG</h1>
+    <h2>Campus Crime &middot; Lancaster University</h2>
+    <div id="loadstatus">Loading campus&hellip;</div>
+    <button id="play" disabled>PLAY</button>
+    <div id="controls">
+      <div><b>WASD</b> move / drive</div><div><b>Mouse</b> look</div>
+      <div><b>Shift</b> sprint</div><div><b>Space</b> jump / handbrake</div>
+      <div><b>Left click</b> punch / shoot</div><div><b>Right click</b> aim</div>
+      <div><b>F</b> enter / steal / exit car</div><div><b>R</b> reload</div>
+      <div><b>1-5 / wheel</b> weapons</div><div><b>H</b> horn</div>
+      <div><b>M</b> map</div><div><b>Esc</b> pause</div>
+    </div>
+    <p class="tip">Hold a gun on a till (yellow $ markers) to rob shops. Pick up weapons around campus. Steal any car. Don't get Busted by the police &mdash; or Wasted.</p>
+    <p class="credit">Campus layout from OpenStreetMap &copy; OpenStreetMap contributors (ODbL). Unofficial fan game, not affiliated with Lancaster University.</p>
+  </div>
+</div>
+
+<script src="vendor/three.min.js"></script>
+<script src="data/campus.js"></script>
+<script src="js/util.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/world.js"></script>
+<script src="js/models.js"></script>
+<script src="js/fx.js"></script>
+<script src="js/actors.js"></script>
+<script src="js/vehicles.js"></script>
+<script src="js/combat.js"></script>
+<script src="js/police.js"></script>
+<script src="js/hud.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
