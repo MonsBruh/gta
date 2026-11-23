@@ -126,6 +126,20 @@ G.buildWorld = async (status) => {
     if (b.t === 'roof' || b.mh > 0) continue;
     grid.fillRings([b.p, ...(b.hl || [])], G.BUILDING);
   }
+  // sections of mapped buildings that aren't there on the ground (removed on request): keep nx*x+nz*z <= d for each
+  // listed "keep" region; anything of that building outside all keep regions is neither drawn nor solid
+  const REMOVE = [{ n: 'Bowland South, East & Slaidburn House', keep: [[0, 1, -211.5], [0, -1, 195.5]] }];
+  G._removeSections = REMOVE;
+  for (const rm of REMOVE) {
+    const b = D.buildings.find((x) => x.n === rm.n); if (!b) continue;
+    const others = [...D.buildings.filter((x) => x !== b && !(x.t === 'roof' || x.mh > 0)), ...D.parts.filter((x) => !(x.mh > 0))];
+    const [x0, z0, x1, z1] = G.bbox(b.p);
+    for (let z = z0; z <= z1; z += 0.25) for (let x = x0; x <= x1; x += 0.25) {
+      if (rm.keep.some((k) => k[0] * x + k[1] * z <= k[2]) || !G.pip(x, z, b.p) || grid.get(x, z) !== G.BUILDING) continue;
+      if (others.some((o) => G.pip(x, z, o.p))) continue;
+      grid.set(x, z, G.FREE);
+    }
+  }
   T.initStairs(D.roads, grid); // needs the building footprints to keep a walkway at the top
   for (const l of D.lines) {
     if (l.k === 'hedge') grid.stroke(l.p, 1.0, G.BARRIER);
@@ -427,6 +441,7 @@ G.buildWorld = async (status) => {
     return out;
   };
   const clipRegion = (p, planes) => { let q = p; for (const pl of planes) { if (q.length < 6) return []; q = clipHalf(q, pl[0], pl[1], pl[2]); } return q.length >= 6 ? q : []; };
+  const cutPiece = (pc, q, planes, extra) => ({ ...pc, ...extra, p: q, _orig: pc._orig || pc.p, _cuts: [...(pc._cuts || []), ...planes] });
   const regionsFor = (ps) => {
     const ux = ps.ux, uz = ps.uz, vx = -uz, vz = ux, sA = ux * ps.ax + uz * ps.az, tA = vx * ps.ax + vz * ps.az, h = ps.W / 2;
     const sLo = [-ux, -uz, -(sA - ps.e)], sHi = [ux, uz, sA + ps.L + ps.e], tLo = [-vx, -vz, -(tA - h)], tHi = [vx, vz, tA + h];
@@ -436,7 +451,7 @@ G.buildWorld = async (status) => {
     };
   };
   const splitByPassages = (b) => {
-    let pieces = [{ ...b, _src: b }];
+    let pieces = [{ ...b, _src: b._src || b }];
     for (const ps of passages) {
       const bb = G.bbox(b.p), r2 = ps.L + ps.e + ps.W;
       if (ps.ax < bb[0] - r2 || ps.ax > bb[2] + r2 || ps.az < bb[1] - r2 || ps.az > bb[3] + r2) continue;
@@ -450,15 +465,41 @@ G.buildWorld = async (status) => {
         const holesIn = (reg) => (pc.hl || []).map((h) => clipRegion(h, reg)).filter((h) => h.length >= 6 && Math.abs(G.polyArea(h)) > 0.3);
         // the building above the passage becomes a bridge with a ~3 m clear walkway underneath
         let gmax = -Infinity; for (let k = 0; k < mid.length; k += 2) gmax = Math.max(gmax, G.groundAt(mid[k], mid[k + 1]));
-        next.push({ ...pc, p: mid, hl: holesIn(R.middle), _bridge: true, _bottom: gmax + 3.1 });
-        for (const reg of R.rest) { const q = clipRegion(pc.p, reg); if (q.length >= 6 && Math.abs(G.polyArea(q)) > 0.5) next.push({ ...pc, p: q, hl: holesIn(reg) }); }
+        next.push(cutPiece(pc, mid, R.middle, { hl: holesIn(R.middle), _bridge: true, _bottom: gmax + 3.1 }));
+        for (const reg of R.rest) { const q = clipRegion(pc.p, reg); if (q.length >= 6 && Math.abs(G.polyArea(q)) > 0.5) next.push(cutPiece(pc, q, reg, { hl: holesIn(reg) })); }
       }
       if (touched) pieces = next;
     }
     return pieces;
   };
   const allB = [];
-  for (const b of [...D.buildings.filter((b) => !b.hp), ...outlines, ...D.parts]) for (const pc of splitByPassages(b)) allB.push(pc);
+  const removeSections = (b) => {
+    const rm = REMOVE.find((x) => x.n === b.n); if (!rm) return [b];
+    const out = [];
+    for (const k of rm.keep) { const q = clipRegion(b.p, [k]); if (q.length >= 6 && Math.abs(G.polyArea(q)) > 1) out.push(cutPiece({ ...b, _src: b }, q, [k], { hl: (b.hl || []).map((h) => clipRegion(h, [k])).filter((h) => h.length >= 6) })); }
+    return out;
+  };
+  for (const b0 of [...D.buildings.filter((b) => !b.hp), ...outlines, ...D.parts]) for (const b of removeSections(b0)) for (const pc of splitByPassages(b)) allB.push(pc);
+  // collision must match what's drawn: for buildings that were cut up (passages / removed sections) or redrawn
+  // from an outline, any solid cell not within ~0.3 m of a drawn piece becomes walkable (no invisible slivers)
+  {
+    const drawn = allB.filter((b) => !b._bridge).map((b) => ({ p: b.p, bb: G.bbox(b.p) }));
+    const inDrawn = (x, z) => drawn.some((d) => x >= d.bb[0] - 0.4 && x <= d.bb[2] + 0.4 && z >= d.bb[1] - 0.4 && z <= d.bb[3] + 0.4 &&
+      (G.pip(x, z, d.p) || G.pip(x + 0.3, z, d.p) || G.pip(x - 0.3, z, d.p) || G.pip(x, z + 0.3, d.p) || G.pip(x, z - 0.3, d.p)));
+    const srcs = new Set(); for (const b of allB) if (b._cuts || b._src && b._src.hp) srcs.add(b._src || b);
+    for (const b of D.buildings) if (b.hp || REMOVE.some((r) => r.n === b.n)) srcs.add(b);
+    for (const src of srcs) {
+      const [x0, z0, x1, z1] = G.bbox(src.p);
+      for (let z = z0 - 0.5; z <= z1 + 0.5; z += 0.5) for (let x = x0 - 0.5; x <= x1 + 0.5; x += 0.5)
+        if (grid.get(x, z) === G.BUILDING && G.pip(x, z, src.p) && !inDrawn(x, z)) grid.set(x, z, G.FREE);
+    }
+    // stray single solid cells left by rasterising outlines (nothing drawn there) are cleared too
+    const W2 = grid.w, Hh = grid.h, d = grid.d;
+    for (let j = 1; j < Hh - 1; j++) for (let i = 1; i < W2 - 1; i++) {
+      const k = j * W2 + i; if (d[k] !== G.BUILDING) continue;
+      if (d[k - 1] !== G.BUILDING && d[k + 1] !== G.BUILDING && d[k - W2] !== G.BUILDING && d[k + W2] !== G.BUILDING) d[k] = G.FREE;
+    }
+  }
   G._rendered = allB;
   for (const b of allB) {
     const r = G.mulberry(G.hash(b.p.join(',').slice(0, 40)));
@@ -493,9 +534,12 @@ G.buildWorld = async (status) => {
         const col = jitter(wc, r, 0.03);
         const faceN = [-dz / L, 0, dx / L];                  // triangle (A,B,C) faces (-dz,dx)
         const same = faceN[0] * nxn + faceN[2] * nzn > 0;
-        const m = raised ? 1 : Math.max(1, Math.ceil(L / 2));  // short pieces so the bottom hugs the ground
+        const cut = b._cuts && b._cuts.find((c) => Math.abs(c[0] * ax + c[1] * az - c[2]) < 1e-3 && Math.abs(c[0] * bx + c[1] * bz - c[2]) < 1e-3);
+        const m = raised && !cut ? 1 : Math.max(1, Math.ceil(L / (cut ? 1 : 2)));  // short pieces so the bottom hugs the ground
         for (let q = 0; q < m; q++) {
           const x0 = ax + dx * q / m, z0 = az + dz * q / m, x1 = ax + dx * (q + 1) / m, z1 = az + dz * (q + 1) / m;
+          // a wall along a cut only where the original building was on the other side (not a bridge across a gap)
+          if (cut && !G.pip((x0 + x1) / 2 + cut[0] * 0.08, (z0 + z1) / 2 + cut[1] * 0.08, b._orig)) continue;
           const f0 = Math.min(foot(x0, z0), top - 0.5), f1 = Math.min(foot(x1, z1), top - 0.5);
           const A = [x0, f0, z0], B = [x1, f1, z1], C = [x1, top, z1], Dd = [x0, top, z0];
           const u0 = (acc + L * q / m) / 5.2, u1 = (acc + L * (q + 1) / m) / 5.2, va = (f0 - gAvg) / 6.6, vb = (f1 - gAvg) / 6.6, v1 = (top - gAvg) / 6.6;
