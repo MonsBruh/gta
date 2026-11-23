@@ -168,6 +168,13 @@ G.buildWorld = async (status) => {
         if (!U.cov[i] && side - U.F[i] > 1.0 && !T.stairs.some((st) => st.side === sd && Math.abs(st.s - i) < st.wid + 0.5)) grid.disc(pnt.x + pnt.lx * sd * (hw + 0.35), pnt.z + pnt.lz * sd * (hw + 0.35), 0.3, G.BARRIER);
       }
     }
+    // parapets on the deck above each tunnel mouth (a real 6 m drop into the cutting)
+    for (let i = 1; i < U.N; i++) {
+      if (U.cov[i] === U.cov[i - 1]) continue;
+      const sP = U.cov[i] ? i + 0.6 : i - 1 - 0.6, pnt = U.at(sP), W = U.hw[Math.round(Math.min(U.N - 1, Math.max(0, sP)))] + 2.6;
+      for (let t = -W; t <= W; t += 0.3) grid.disc(pnt.x + pnt.lx * t, pnt.z + pnt.lz * t, 0.25, G.BARRIER);
+      U.portals = U.portals || []; U.portals.push({ s: sP, W });
+    }
     for (const st of T.stairs) {
       for (let s2 = st.s - st.wid - 0.6; s2 <= st.s + st.wid + 0.6; s2 += 0.3) {
         const pnt = U.at(s2);
@@ -179,6 +186,12 @@ G.buildWorld = async (status) => {
       }
     }
   }
+
+  // the edge of the playable map: a dry-stone field wall (visible) instead of an invisible limit
+  const EDGE = 2.5;
+  const boundary = [[-HW + EDGE, -HH + EDGE], [HW - EDGE, -HH + EDGE], [HW - EDGE, HH - EDGE], [-HW + EDGE, HH - EDGE], [-HW + EDGE, -HH + EDGE]];
+  grid.stroke(boundary.flat(), 0.9, G.BARRIER);
+  for (let j = 0; j < grid.h; j++) for (let i = 0; i < grid.w; i++) { const x = grid.ox + (i + 0.5) * grid.cell, z = grid.oz + (j + 0.5) * grid.cell; if (Math.abs(x) > HW - EDGE || Math.abs(z) > HH - EDGE) grid.d[j * grid.w + i] = G.BARRIER; }
 
   // ---------------- ground texture ----------------
   status('Painting the ground…'); await tick();
@@ -258,7 +271,7 @@ G.buildWorld = async (status) => {
     const a = U.at(i), b = U.at(i + 1), W = Math.max(U.hw[i], U.hw[i + 1]) + 2.6;
     for (let t = -W; t < W - 1e-6; t += 1) {
       const t1 = Math.min(W, t + 1);
-      const P = (pp, ii, tt) => [pp.x + pp.lx * tt, U.Hr[ii] + (U.Hl[ii] - U.Hr[ii]) * G.clamp((tt + U.hw[ii] + 3.5) / (2 * (U.hw[ii] + 3.5)), 0, 1), pp.z + pp.lz * tt];
+      const P = (pp, ii, tt) => [pp.x + pp.lx * tt, T.deckAt(ii, tt), pp.z + pp.lz * tt];
       deckQuads.push([P(a, i, t), P(b, i + 1, t), P(b, i + 1, t1), P(a, i, t1)]);
     }
   }
@@ -362,13 +375,30 @@ G.buildWorld = async (status) => {
   };
   const roofFlat = hex('#a3a19b'), roofSlate = hex('#5d5a5e'), roofTile = hex('#8a5444');
   G.buildingList = [];
-  const allB = [...D.buildings.filter((b) => !b.hp), ...D.parts];
+  // buildings mapped as an outline + "parts": draw the parts AND the outline (inset slightly so they don't
+  // z-fight), otherwise the unmapped remainder of the outline is an invisible wall
+  const insetRing = (p, d) => {
+    const n = p.length / 2, out = [], ccw = G.polyArea(p) > 0 ? 1 : -1;
+    for (let i = 0; i < n; i++) {
+      const a = (i + n - 1) % n, c = (i + 1) % n;
+      let e1x = p[i * 2] - p[a * 2], e1z = p[i * 2 + 1] - p[a * 2 + 1], e2x = p[c * 2] - p[i * 2], e2z = p[c * 2 + 1] - p[i * 2 + 1];
+      const l1 = Math.hypot(e1x, e1z) || 1, l2 = Math.hypot(e2x, e2z) || 1;
+      const n1x = -e1z / l1 * ccw, n1z = e1x / l1 * ccw, n2x = -e2z / l2 * ccw, n2z = e2x / l2 * ccw; // inward normals
+      const k = Math.max(0.3, 1 + n1x * n2x + n1z * n2z);
+      out.push(p[i * 2] + (n1x + n2x) / k * d, p[i * 2 + 1] + (n1z + n2z) / k * d);
+    }
+    return out;
+  };
+  const partOf = (b) => D.parts.find((pt) => { const c = G.centroid(pt.p); return G.pip(c.x, c.z, b.p); });
+  const outlines = D.buildings.filter((b) => b.hp).map((b) => { const pt = partOf(b); return { ...b, p: insetRing(b.p, 0.12), hl: b.hl && b.hl.map((h) => insetRing(h, -0.12)), h: b.h - 0.08, m: b.m || (pt && pt.m), _col: pt }; });
+  const allB = [...D.buildings.filter((b) => !b.hp), ...outlines, ...D.parts];
+  G._rendered = allB;
   for (const b of allB) {
     const r = G.mulberry(G.hash(b.p.join(',').slice(0, 40)));
     let gMin = Infinity, gSum = 0, gN = 0;
-    for (let k = 0; k < b.p.length; k += 2) { const gh = T.base(b.p[k], b.p[k + 1]); gMin = Math.min(gMin, gh); gSum += gh; gN++; }
+    for (let k = 0; k < b.p.length; k += 2) { const gh = T.surf(b.p[k], b.p[k + 1]); gMin = Math.min(gMin, gh); gSum += gh; gN++; }
     const gAvg = gSum / gN;
-    const wc = wallColour(b), base = b.mh > 0 ? gAvg + b.mh : gMin - 0.8, top = gAvg + Math.max((b.mh || 0) + 0.5, b.h);
+    const wc = wallColour(b._col || b), base = b.mh > 0 ? gAvg + b.mh : gMin - 0.8, top = gAvg + Math.max((b.mh || 0) + 0.5, b.h);
     const plain = PLAIN.has(b.t) || (b.h - (b.mh || 0)) < 3;
     const W = plain ? BP : BW;
     const rings = [b.p, ...(b.hl || [])];
@@ -428,9 +458,9 @@ G.buildWorld = async (status) => {
   // ---------------- barriers ----------------
   status('Growing hedges…'); await tick();
   const HB = new GeoBuilder();
-  const hedgeC = hex('#4f8a38'), wallC = hex('#8f897e'), fenceC = hex('#5e544a'), railC = hex('#555a5e');
+  const hedgeC = hex('#4f8a38'), wallC = hex('#8f897e'), fenceC = hex('#7a6a58'), railC = hex('#555a5e');
   for (const l of D.lines) {
-    const spec = l.k === 'hedge' ? [0.9, 1.5, hedgeC] : l.k === 'wall' ? [0.4, 1.1, wallC] : l.k === 'fence' ? [0.08, 1.2, fenceC] : null;
+    const spec = l.k === 'hedge' ? [0.9, 1.5, hedgeC] : l.k === 'wall' ? [0.4, 1.1, wallC] : l.k === 'fence' ? [0.14, 1.25, fenceC] : null;
     if (!spec) continue;
     const p = l.p;
     for (let k = 0; k + 3 < p.length; k += 2) {
@@ -453,6 +483,14 @@ G.buildWorld = async (status) => {
           s0 = null;
         }
       }
+    }
+  }
+  for (let k = 0; k + 1 < boundary.length; k++) {
+    const [ax, az] = boundary[k], [bx, bz] = boundary[k + 1], L = Math.hypot(bx - ax, bz - az), n = Math.ceil(L / 3);
+    for (let q2 = 0; q2 < n; q2++) {
+      const x0b = ax + (bx - ax) * q2 / n, z0b = az + (bz - az) * q2 / n, x1b = ax + (bx - ax) * (q2 + 1) / n, z1b = az + (bz - az) * (q2 + 1) / n;
+      const g0 = Math.min(T.base(x0b, z0b), T.base(x1b, z1b)), g1 = Math.max(T.base(x0b, z0b), T.base(x1b, z1b));
+      HB.box(x0b, z0b, x1b, z1b, 0.7, g0 - 0.4, g1 + 1.3, jitter(hex('#8a857a'), rnd, 0.08));
     }
   }
   for (const l of D.lines) if (l.k === 'rail') { const p = l.p; for (let k = 0; k + 3 < p.length; k += 2) { const L = Math.hypot(p[k + 2] - p[k], p[k + 3] - p[k + 1]), n = Math.max(1, Math.ceil(L / 4)); for (let q2 = 0; q2 < n; q2++) { const xa = p[k] + (p[k + 2] - p[k]) * q2 / n, za = p[k + 1] + (p[k + 3] - p[k + 1]) * q2 / n, xb = p[k] + (p[k + 2] - p[k]) * (q2 + 1) / n, zb = p[k + 1] + (p[k + 3] - p[k + 1]) * (q2 + 1) / n; const gy = (T.base(xa, za) + T.base(xb, zb)) / 2; HB.box(xa, za, xb, zb, 0.1, gy + 0.05, gy + 0.25, railC); } } }

@@ -70,12 +70,13 @@ T.initUnderpass = (roads) => {
     let dc = Infinity; for (let j = Math.max(0, i - 15); j <= Math.min(N - 1, i + 15); j++) if (cov[j]) dc = Math.min(dc, Math.abs(j - i) * DS);
     hw[i] = cov[i] ? 7 : dc < 15 ? G.lerp(7, 4.6, dc / 15) : 4.6;
   }
+  const FILL = 10; U.FILL = FILL;
   for (let i = 0; i < N; i++) {
-    const p = at(i * DS), W = hw[i] + 3.5;
+    const p = at(i * DS), W = hw[i] + FILL;
     Hl[i] = T.base(p.x + p.lx * W, p.z + p.lz * W); Hr[i] = T.base(p.x - p.lx * W, p.z - p.lz * W);
   }
   const smooth = (a, r) => { const o = new Float32Array(a.length); for (let i = 0; i < a.length; i++) { let s = 0, c = 0; for (let j = Math.max(0, i - r); j <= Math.min(a.length - 1, i + r); j++) { s += a[j]; c++; } o[i] = s / c; } return o; };
-  const HlS = smooth(Hl, 4), HrS = smooth(Hr, 4);
+  const HlS = smooth(Hl, 6), HrS = smooth(Hr, 6);
   // floor: follow the natural cutting, but keep >= 6.2 m below the deck where covered; max 9% grade
   const F = new Float32Array(N);
   for (let i = 0; i < N; i++) F[i] = cov[i] ? Math.min(nat[i], Math.min(HlS[i], HrS[i]) - 6.2) : nat[i];
@@ -108,8 +109,19 @@ T.locate = (x, z) => {
   return loc;
 };
 const floorAt = (s) => { const f = s / DS, i = Math.min(U.N - 2, Math.max(0, Math.floor(f))), k = f - i; return U.F[i] * (1 - k) + U.F[i + 1] * k; };
-const deckAt = (i, t) => { const W = U.hw[i] + 3.5; return U.Hr[i] + (U.Hl[i] - U.Hr[i]) * G.clamp((t + W) / (2 * W), 0, 1); };
-T.floorAt = floorAt;
+const deckAt = (i, t) => { const W = U.hw[i]; return U.Hr[i] + (U.Hl[i] - U.Hr[i]) * G.clamp((t + W) / (2 * W), 0, 1); };
+T.floorAt = floorAt; T.deckAt = deckAt;
+// ground beside the corridor is levelled flush with the deck / top of the cutting walls
+// (the raw LIDAR dips there, which would otherwise leave an invisible ledge)
+const fillAt = (l, b) => {
+  const i = l.i, at = Math.abs(l.t) - U.hw[i]; if (!U.act[i] || at < 0 || at > U.FILL) return b;
+  const S = l.t > 0 ? U.Hl[i] : U.Hr[i];
+  let w = at < U.FILL - 4 ? 1 : 1 - (at - (U.FILL - 4)) / 4;
+  w *= G.clamp((S - U.F[i] - 0.35) / 1.0, 0, 1);
+  return b + (S - b) * w;
+};
+// surface level ignoring the cut (used for buildings and the tops of stairs)
+T.surf = (x, z) => { const b = T.base(x, z), l = T.locate(x, z); return l ? fillAt(l, b) : b; };
 // stairs from Alexandra Square down to the underground bus stop (from OSM steps tagged level=-1;0)
 T.stairs = [];
 T.initStairs = (roads) => {
@@ -122,7 +134,7 @@ T.initStairs = (roads) => {
     if (T.stairs.some((st) => Math.abs(st.s - s0) < 12)) continue;
     const hw = U.hw[l.i], len = 9.5, wid = 1.7;
     const p = U.at(s0), tx = p.x + p.lx * side * (hw + len + 0.5), tz = p.z + p.lz * side * (hw + len + 0.5);
-    T.stairs.push({ s: s0, side, hw, len, wid, top: T.base(tx, tz), bot: floorAt(s0) });
+    T.stairs.push({ s: s0, side, hw, len, wid, top: T.surf(tx, tz), bot: floorAt(s0) });
   }
 };
 const stairAt = (l) => {
@@ -139,6 +151,7 @@ T.phys = (x, z) => {
   if (l) {
     if (U.act[l.i] && Math.abs(l.t) <= U.hw[l.i]) return floorAt(l.s);
     const sh = stairAt(l); if (sh !== null) return sh;
+    return fillAt(l, T.base(x, z));
   }
   return T.base(x, z);
 };
@@ -148,6 +161,7 @@ T.mesh = (x, z) => {
   if (l) {
     if (U.act[l.i] && Math.abs(l.t) <= U.hw[l.i] + 1.6) return floorAt(l.s);
     const sh = stairAt(l); if (sh !== null) return sh;
+    return fillAt(l, T.base(x, z));
   }
   return T.base(x, z);
 };

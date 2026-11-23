@@ -9,7 +9,7 @@ G.buildUnderpass = () => {
   const R = new G.GeoBuilder();      // road surfaces
   const L = new G.GeoBuilder();      // emissive lights
   const W = (i, t, y) => { const p = U.at(i); return [p.x + p.lx * t, y, p.z + p.lz * t]; };
-  const deck = (i, t) => U.Hr[i] + (U.Hl[i] - U.Hr[i]) * G.clamp((t + U.hw[i] + 3.5) / (2 * (U.hw[i] + 3.5)), 0, 1);
+  const deck = (i, t) => T.deckAt(i, t);
   const stairGap = (side, i) => T.stairs.some((st) => st.side === side && Math.abs(st.s - i) < st.wid);
   const N = U.N;
   for (let i = 0; i + 1 < N; i++) {
@@ -68,6 +68,16 @@ G.buildUnderpass = () => {
     if (U.cov[i] === U.cov[i - 1]) continue;
     const k = U.cov[i] ? i : i - 1, hw = U.hw[k] + 2.6;
     for (let t = -hw; t < hw - 1e-6; t += 1) B.quad(W(k, t, deck(k, t) - 0.75), W(k, t + 1, deck(k, t + 1) - 0.75), W(k, t + 1, deck(k, t + 1) + 0.02), W(k, t, deck(k, t) + 0.02), null, concreteDark);
+  }
+  // parapet on the deck above each tunnel mouth
+  for (const pt of (U.portals || [])) {
+    const i = Math.round(G.clamp(pt.s, 0, N - 1));
+    for (let t = -pt.W; t < pt.W - 1e-6; t += 1) {
+      const y0 = deck(i, t), y1 = deck(i, t + 1);
+      const a0 = W(pt.s - 0.25, t, y0 - 0.05), a1 = W(pt.s - 0.25, t + 1, y1 - 0.05), b0 = W(pt.s + 0.25, t, y0 - 0.05), b1 = W(pt.s + 0.25, t + 1, y1 - 0.05);
+      const up = (v) => [v[0], v[1] + 1.15, v[2]];
+      B.quad(a0, a1, up(a1), up(a0), null, concrete); B.quad(b0, b1, up(b1), up(b0), null, concrete); B.quad(up(a0), up(a1), up(b1), up(b0), null, concreteDark);
+    }
   }
   // stairwells: steps + side walls with parapets
   for (const st of T.stairs) {
