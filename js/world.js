@@ -618,6 +618,7 @@ G.buildWorld = async (status) => {
   for (const r of G.namedRoads) for (let i = 0; i < r.p.length; i += 2) G.roadBuckets.add(r.p[i], r.p[i + 1], r);
 
   if (U.ok) { status('Digging the Underpass…'); await tick(); G.buildUnderpass(); }
+  G.buildSpineSigns();
 
   // ---------------- landmarks ----------------
   const find = (name) => {
