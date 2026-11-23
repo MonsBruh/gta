@@ -121,7 +121,12 @@ const fillAt = (l, b) => {
   return b + (S - b) * w;
 };
 // surface level ignoring the cut (used for buildings and the tops of stairs)
-T.surf = (x, z) => { const b = T.base(x, z), l = T.locate(x, z); return l ? fillAt(l, b) : b; };
+// (over the covered tunnel this is the deck = Alexandra Square level, never the tunnel floor)
+T.surf = (x, z) => {
+  const b = T.base(x, z), l = T.locate(x, z); if (!l) return b;
+  if (U.cov[l.i] && Math.abs(l.t) <= U.hw[l.i] + 2.6) return deckAt(l.i, l.t);
+  return fillAt(l, b);
+};
 // stairs from Alexandra Square down to the underground bus stop (from OSM steps tagged level=-1;0)
 T.stairs = [];
 T.initStairs = (roads, grid) => {

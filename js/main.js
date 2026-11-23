@@ -11,7 +11,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true; renderer.shadowMap.type = G.mobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 const scene = G.scene = new THREE.Scene();
-const camera = G.camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.2, G.mobile ? 900 : 1800);
+const camera = G.camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.06, G.mobile ? 900 : 1800);
 scene.fog = new THREE.Fog(0x9cc4e4, 180, 1000);
 scene.background = new THREE.Color(0x9cc4e4);
 const hemi = new THREE.HemisphereLight(0xcfe6ff, 0x4d5a3a, 0.9); scene.add(hemi);
@@ -148,6 +148,24 @@ function updateWorldTime(dt) {
 }
 
 // ---------------- camera ----------------
+const CAM_R = 0.4;
+const camSolid = (x, y, z) => G.pointSolid(x, y, z, G.solidForCam);
+G.camClear = (x, y, z, R = CAM_R) => !camSolid(x, y, z) && !camSolid(x + R, y, z) && !camSolid(x - R, y, z) && !camSolid(x, y, z + R) && !camSolid(x, y, z - R) &&
+  !camSolid(x, y + R, z) && !camSolid(x, y - R, z) && !camSolid(x + R * 0.7, y, z + R * 0.7) && !camSolid(x - R * 0.7, y, z - R * 0.7) &&
+  !camSolid(x + R * 0.7, y, z - R * 0.7) && !camSolid(x - R * 0.7, y, z + R * 0.7);
+// walk from the player's head toward the wanted camera spot; stop at the last spot with clearance
+G.camSafe = (target, want) => {
+  const d = want.clone().sub(target), L = d.length(); if (L < 1e-4) return want;
+  d.divideScalar(L);
+  let ok = 0; const step = 0.12;
+  for (let s = step; s <= L + 1e-6; s += step) {
+    const x = target.x + d.x * s, y = target.y + d.y * s, z = target.z + d.z * s;
+    if (!G.camClear(x, y, z, Math.min(CAM_R, 0.2 + s * 0.3))) break;  // clearance grows as it backs away from the player
+    ok = s;
+  }
+  if (ok >= L - 1e-6) return want;
+  return target.clone().addScaledVector(d, Math.max(0.15, ok));
+};
 function updateCamera(dt) {
   const pl = G.player, cm = G.cam;
   if (G._freeCam) { camera.position.copy(G._freeCam.pos); camera.lookAt(G._freeCam.look); return; }
@@ -168,13 +186,15 @@ function updateCamera(dt) {
   cm.curDist = G.lerp(cm.curDist, dist, Math.min(1, dt * 6));
   let want = target.clone().addScaledVector(f, -cm.curDist).addScaledVector(right, shoulder);
   // collide with buildings
-  // keep the camera out of buildings, hills, and inside the tunnel when you're down there
-  const k = G.march3(target, want, G.solidForCam, 0.3);
-  if (k < 1) { const kk = Math.max(0.05, k - 0.06); want = target.clone().lerp(want, kk); }
-  const gy = G.groundAt(want.x, want.z, want.y);
-  if (want.y < gy + 0.35) want.y = gy + 0.35;
+  // keep the camera out of walls, ceilings, buildings and hills: slide it in toward the player instead
+  // (it keeps ~0.4 m of clearance all round so the near plane never cuts through a surface)
+  want = G.camSafe(target, want);
   camera.position.copy(want);
-  if (cm.shake > 0) { camera.position.add(new V3(G.rand(-1, 1), G.rand(-1, 1), G.rand(-1, 1)).multiplyScalar(cm.shake * 0.15)); cm.shake = Math.max(0, cm.shake - dt * 2.5); }
+  if (cm.shake > 0) {
+    const sh = new V3(G.rand(-1, 1), G.rand(-1, 1), G.rand(-1, 1)).multiplyScalar(cm.shake * 0.15);
+    if (G.camClear(want.x + sh.x, want.y + sh.y, want.z + sh.z)) camera.position.add(sh);
+    cm.shake = Math.max(0, cm.shake - dt * 2.5);
+  }
   camera.lookAt(want.clone().add(f));
   const fov = pl.vehicle ? 68 + Math.min(14, Math.abs(pl.vehicle.speed) * 0.35) : pl.aiming ? 55 : 68;
   if (Math.abs(camera.fov - fov) > 0.1) { camera.fov = G.lerp(camera.fov, fov, Math.min(1, dt * 6)); camera.updateProjectionMatrix(); }

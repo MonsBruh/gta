@@ -400,7 +400,16 @@ G.buildWorld = async (status) => {
     let gMin = Infinity, gSum = 0, gN = 0;
     for (let k = 0; k < b.p.length; k += 2) { const gh = T.surf(b.p[k], b.p[k + 1]); gMin = Math.min(gMin, gh); gSum += gh; gN++; }
     const gAvg = gSum / gN;
-    const wc = wallColour(b._col || b), base = b.mh > 0 ? gAvg + b.mh : gMin - 0.8, top = gAvg + Math.max((b.mh || 0) + 0.5, b.h);
+    // anything standing on Alexandra Square's deck must start above the tunnel ceiling
+    let deckMax = -Infinity;
+    for (const ring of [b.p, ...(b.hl || [])]) for (let k = 0, n = ring.length / 2; k < n; k++) {
+      const ax = ring[k * 2], az = ring[k * 2 + 1], bx = ring[((k + 1) % n) * 2], bz = ring[((k + 1) % n) * 2 + 1], L = Math.hypot(bx - ax, bz - az), m = Math.max(1, Math.ceil(L));
+      for (let q2 = 0; q2 <= m; q2++) { const d = T.deck(ax + (bx - ax) * q2 / m, az + (bz - az) * q2 / m, 2.7); if (d !== null && d > deckMax) deckMax = d; }
+    }
+    let base = b.mh > 0 ? gAvg + b.mh : gMin - 0.8;
+    if (deckMax > -Infinity) base = Math.max(base, deckMax - 0.7);
+    const wc = wallColour(b._col || b), top = Math.max(base + 0.5, gAvg + Math.max((b.mh || 0) + 0.5, b.h));
+    G._bldBase = G._bldBase || []; G._bldBase.push({ b, base, top });
     const plain = PLAIN.has(b.t) || (b.h - (b.mh || 0)) < 3;
     const W = plain ? BP : BW;
     const rings = [b.p, ...(b.hl || [])];
@@ -509,7 +518,7 @@ G.buildWorld = async (status) => {
   const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), col = new THREE.Color();
   let ci = 0, ki = 0;
   trees.forEach((t, i) => {
-    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * 6.28); sc.set(t[2], t[2] * G.rand(0.85, 1.2), t[2]); ps.set(t[0], T.phys(t[0], t[1]) - 0.1, t[1]);
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * 6.28); sc.set(t[2], t[2] * G.rand(0.85, 1.2), t[2]); ps.set(t[0], G.groundAt(t[0], t[1]) - 0.1, t[1]);
     mtx.compose(ps, q, sc); trunkM.setMatrixAt(i, mtx);
     const conifer = (i % 4 === 3) && ki < nConif;
     col.setHSL(conifer ? 0.33 : G.rand(0.2, 0.3), G.rand(0.35, 0.55), conifer ? G.rand(0.16, 0.22) : G.rand(0.22, 0.34));
