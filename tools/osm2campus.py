@@ -195,6 +195,9 @@ for wid, (refs, t) in ways.items():
             if t.get('name'): rec['n'] = t['name']
             if t.get('tunnel') and t.get('tunnel') != 'no' or t.get('covered') == 'yes' or t.get('layer', '0').startswith('-'): rec['tu'] = 1
             if t.get('bridge') and t.get('bridge') != 'no': rec['br'] = int(num(t.get('layer'), 1))
+            if t.get('layer') and t['layer'] != '0': rec['ly'] = t['layer']
+            if t.get('tunnel'): rec['tn'] = t['tunnel']
+            if t.get('level'): rec['lv'] = t['level']
             if t.get('oneway') == 'yes' or hw in ('motorway', 'motorway_link'): rec['ow'] = 1
             if t.get('maxspeed'): rec['ms'] = t['maxspeed']
             roads.append(rec)

@@ -4,11 +4,11 @@
 const V3 = THREE.Vector3;
 
 class Vehicle {
-  constructor(type, x, z, yaw) {
+  constructor(type, x, z, yaw, y) {
     this.type = type; this.spec = G.VTYPES[type];
     this.L = this.spec.L; this.W = this.spec.W;
     this.mesh = G.makeVehicle(type); this.parts = this.mesh.userData.parts;
-    this.pos = new V3(x, 0, z); this.yaw = yaw || 0; this.vel = new V3();
+    this.pos = new V3(x, y !== undefined ? y : G.groundAt(x, z), z); this.yaw = yaw || 0; this.vel = new V3(); this.vy = 0; this.pitch = 0; this.roll = 0;
     this.speed = 0; this.steer = 0; this.hp = this.spec.hp; this.dead = false; this.burnT = 0;
     this.driver = null; this.passengers = []; this.ai = null; this.siren = type === 'police';
     this.parked = false; this.hornT = 0; this.wheelSpin = 0; this.sinkT = 0;
@@ -18,7 +18,8 @@ class Vehicle {
   remove() { G.scene.remove(this.mesh); this.removed = true; for (const p of this.passengers) if (p !== G.player) { p.remove(); const i = G.actors.indexOf(p); if (i >= 0) G.actors.splice(i, 1); } }
   fwd() { return { x: Math.sin(this.yaw), z: Math.cos(this.yaw) }; }
   sync() {
-    this.mesh.position.set(this.pos.x, this.sinkT > 0 ? -this.sinkT * 0.6 : 0, this.pos.z); this.mesh.rotation.y = this.yaw;
+    this.mesh.position.set(this.pos.x, this.pos.y - (this.sinkT > 0 ? this.sinkT * 0.6 : 0), this.pos.z);
+    this.mesh.rotation.order = 'YXZ'; this.mesh.rotation.y = this.yaw; this.mesh.rotation.x = -this.pitch; this.mesh.rotation.z = this.roll;
     // body roll / pitch for feel
     const b = this.parts.body; b.rotation.z = G.clamp(-this.lat * 0.012, -0.08, 0.08); b.rotation.x = G.clamp(-(this.accel || 0) * 0.004, -0.05, 0.05);
     for (const w of this.parts.wheels) { w.w.rotation.x = this.wheelSpin; if (w.front) w.piv.rotation.y = this.steer * 0.8; }
@@ -30,7 +31,28 @@ class Vehicle {
     for (const [lx, lz] of pts) out.push([x + lx * c + lz * s, z - lx * s + lz * c]);
     return out;
   }
-  blockedAt(x, z, yaw) { for (const [px, pz] of this.samples(x, z, yaw)) { const v = G.grid.get(px, pz); if (v === G.BUILDING || v === G.BARRIER || v === G.TREE) return true; } return false; }
+  blockedAt(x, z, yaw) {
+    const y = this.pos.y;
+    for (const [px, pz] of this.samples(x, z, yaw)) {
+      if (!G.inTunnel(px, pz, y)) { const v = G.grid.get(px, pz); if (v === G.BUILDING || v === G.BARRIER || v === G.TREE) return true; }
+      if (G.groundAt(px, pz, y + 0.8) > y + 1.1) return true;  // retaining walls, steep banks
+    }
+    return false;
+  }
+  // follow the terrain: height, pitch, roll, gravity (cars can get air off crests and drop into the cutting)
+  ground(dt) {
+    const f = this.fwd(), r = { x: -f.z, z: f.x }, hl = this.L * 0.4, hw = this.W * 0.4, y = this.pos.y + 0.8;
+    const gF = G.groundAt(this.pos.x + f.x * hl, this.pos.z + f.z * hl, y), gB = G.groundAt(this.pos.x - f.x * hl, this.pos.z - f.z * hl, y);
+    const gR = G.groundAt(this.pos.x + r.x * hw, this.pos.z + r.z * hw, y), gL = G.groundAt(this.pos.x - r.x * hw, this.pos.z - r.z * hw, y);
+    const g = (gF + gB + gR + gL) / 4;
+    const free = this.pos.y + this.vy * dt - 10 * dt * dt;
+    if (free > g + 0.05 && (this.vy > 0.5 || this.pos.y - g > 0.35)) { this.pos.y = free; this.vy -= 20 * dt; this.air = (this.air || 0) + dt; return; }
+    if (this.air > 0.25 && -this.vy > 6) { this.damage((-this.vy - 6) * 25, this.driver === G.player ? null : null); G.audio.crash(-this.vy / 20, G.camDist(this.pos)); if (this.driver === G.player) G.shake(-this.vy / 25); }
+    this.air = 0;
+    const ny = Math.min(8, (g - this.pos.y) / Math.max(dt, 1e-3)); this.vy = ny; this.pos.y = g;
+    const tp = Math.atan2(gF - gB, 2 * hl), tr = Math.atan2(gL - gR, 2 * hw);
+    this.pitch += (tp - this.pitch) * Math.min(1, dt * 12); this.roll += (tr - this.roll) * Math.min(1, dt * 12);
+  }
   // control: {throttle -1..1, steer -1..1, handbrake bool}
   physics(dt, ctl) {
     const sp = this.spec;
@@ -45,6 +67,7 @@ class Vehicle {
     else vF -= Math.sign(vF) * Math.min(Math.abs(vF), (1.5 + Math.abs(vF) * 0.05) * dt);
     if (ctl.handbrake) vF -= Math.sign(vF) * Math.min(Math.abs(vF), 6 * dt);
     vF -= vF * Math.abs(vF) * 0.0006 * dt * 60;
+    if (!this.air) vF -= 9.8 * Math.sin(this.pitch) * dt;  // hills
     // off-road (grass) slows you a bit
     if (G.roadGrid.get(this.pos.x, this.pos.z) !== 1 && Math.abs(vF) > 12) vF -= Math.sign(vF) * 4 * dt;
     // steering
@@ -71,6 +94,7 @@ class Vehicle {
       if (this.blockedAt(this.pos.x, this.pos.z, this.yaw)) { const fr = G.grid.nearestFree(this.pos.x, this.pos.z, (v) => v === G.FREE || v === G.WATER, 8); this.pos.x = fr.x; this.pos.z = fr.z; }
     }
     if (hitSpeed > 4) { this.damage(hitSpeed * hitSpeed * 0.55, null); G.audio.crash(hitSpeed / 20, G.camDist(this.pos)); if (this.driver === G.player) G.shake(hitSpeed / 25); }
+    this.ground(dt);
     this.speed = this.vel.x * nf.x + this.vel.z * nf.z;
     this.wheelSpin += this.speed * dt / 0.34;
     // water
@@ -90,7 +114,7 @@ class Vehicle {
   blowUp(by) {
     if (this.dead && this.exploded) return;
     this.dead = true; this.exploded = true; this.hp = 0;
-    G.explode(this.pos.clone().setY(1), 7, 150, by, this);
+    G.explode(this.pos.clone().setY(this.pos.y + 1), 7, 150, by, this);
     this.mesh.traverse((o) => { if (o.isMesh && o.material && !Array.isArray(o.material) && o.material.color) { o.material = o.material.clone(); o.material.color.multiplyScalar(0.15); if (o.material.emissive) o.material.emissive.setHex(0); } });
     this.vel.y = 0; this.vel.multiplyScalar(0.3);
     this.burnT = 10;
@@ -107,7 +131,7 @@ class Vehicle {
     const hpk = this.hp / this.spec.hp;
     if (!this.dead && hpk < 0.45 && Math.random() < dt * (hpk < 0.2 ? 14 : 5)) G.fx.smoke(this.pos.clone().add(new V3(Math.sin(this.yaw) * this.L * 0.38, 1.2, Math.cos(this.yaw) * this.L * 0.38)), hpk < 0.2);
     if (!this.dead && hpk < 0.2) { this.fireT = (this.fireT || 0) + dt; if (Math.random() < dt * 25) G.fx.fire(this.pos.clone().add(new V3(Math.sin(this.yaw) * this.L * 0.38, 1.1, Math.cos(this.yaw) * this.L * 0.38)), 0.6); if (this.fireT > 5) this.blowUp(this.lastHitBy); }
-    if (this.dead && this.burnT > 0) { this.burnT -= dt; if (Math.random() < dt * 30) G.fx.fire(this.pos.clone().setY(1.0), 1.1); if (Math.random() < dt * 6) G.fx.smoke(this.pos.clone().setY(1.5), true); }
+    if (this.dead && this.burnT > 0) { this.burnT -= dt; if (Math.random() < dt * 30) G.fx.fire(this.pos.clone().setY(this.pos.y + 1.0), 1.1); if (Math.random() < dt * 6) G.fx.smoke(this.pos.clone().setY(this.pos.y + 1.5), true); }
     if (this.parts.lightA) {
       const on = this.siren && this.sirenOn && !this.dead; const ph = Math.floor(G.time * 6) % 2;
       this.parts.lightA.material.color.setHex(on ? (ph ? 0x2050ff : 0x001040) : 0x203060);
@@ -157,7 +181,6 @@ G.chooseNext = (ai) => {
     if (ai.path.length) { const step = ai.path.shift(); const e = n.adj.find((x) => x.n === step.n); if (e) return e; }
   }
   let opts = n.adj.filter((e) => e.n !== ai.from);
-  const surface = opts.filter((e) => !e.r.tu); if (surface.length) opts = surface;
   if (!opts.length) opts = n.adj;
   return opts.length ? G.pick(opts) : null;
 };
@@ -167,7 +190,7 @@ G.driveAI = (v, dt) => {
   let target, desired;
   const chasing = ai.mode === 'chase' && G.police.stars > 0 && !pl.dead;
   const tgtPos = pl.vehicle ? pl.vehicle.pos : pl.pos;
-  if (chasing && G.dist(v.pos, tgtPos) < 45 && G.lineOfSight(new V3(v.pos.x, 1, v.pos.z), new V3(tgtPos.x, 1, tgtPos.z), true)) {
+  if (chasing && G.dist(v.pos, tgtPos) < 45 && G.lineOfSight(new V3(v.pos.x, v.pos.y + 1.2, v.pos.z), new V3(tgtPos.x, tgtPos.y + 1.2, tgtPos.z), true)) {
     target = { x: tgtPos.x, z: tgtPos.z }; desired = pl.vehicle ? 40 : 14;
     const d = G.dist(v.pos, tgtPos);
     const still = !pl.vehicle || Math.abs(pl.vehicle.speed) < 2.5;
@@ -213,8 +236,8 @@ G.driveAI = (v, dt) => {
       const dx = p.x - v.pos.x, dz = p.z - v.pos.z; const a = dx * f.x + dz * f.z; if (a < 0 || a > look + v.L / 2) return;
       const lat = Math.abs(dx * -f.z + dz * f.x); if (lat < v.W / 2 + rad) block = Math.min(block, a - v.L / 2 - rad);
     };
-    for (const o of G.vehicles) if (o !== v && !o.removed && G.d2(o.pos.x, o.pos.z, v.pos.x, v.pos.z) < 900) chk(o.pos, o.W * 0.6);
-    for (const a of G.actors) if (!a.vehicle && !a.dead && G.d2(a.pos.x, a.pos.z, v.pos.x, v.pos.z) < 500) chk(a.pos, 0.5);
+    for (const o of G.vehicles) if (o !== v && !o.removed && Math.abs(o.pos.y - v.pos.y) < 3 && G.d2(o.pos.x, o.pos.z, v.pos.x, v.pos.z) < 900) chk(o.pos, o.W * 0.6);
+    for (const a of G.actors) if (!a.vehicle && !a.dead && Math.abs(a.pos.y - v.pos.y) < 2.5 && G.d2(a.pos.x, a.pos.z, v.pos.x, v.pos.z) < 500) chk(a.pos, 0.5);
     if (block < look) {
       desired = Math.min(desired, Math.max(0, (block - 2) * 1.2)); ai.braking = true;
       if (block < 4) { ai.waitT = (ai.waitT || 0) + dt; if (ai.waitT > 2 && v.hornT <= 0 && G.dist(v.pos, pl.pos) < 40 && !pl.vehicle || ai.waitT > 2 && pl.vehicle && G.dist(v.pos, pl.pos) < 12 && v.hornT <= 0) { v.hornT = 3; if (G.dist(v.pos, pl.pos) < 50) G.audio.horn(); } if (ai.waitT > 9) { ai.waitT = 0; ai.reverseT = 1.2; } }
@@ -277,8 +300,9 @@ G.exitVehicle = (a, bail) => {
   const f = v.fwd(); const sides = [1, -1];
   for (const s of sides) {
     const x = v.pos.x + (-f.z) * s * (v.W / 2 + 0.7), z = v.pos.z + f.x * s * (v.W / 2 + 0.7);
-    if (!G.solidForWalk(G.grid.get(x, z))) { a.pos.set(x, 0, z); break; }
-    a.pos.set(x, 0, z);
+    const gy = G.groundAt(x, z, v.pos.y + 0.6);
+    a.pos.set(x, gy, z);
+    if (!G.solidForWalk(G.grid.get(x, z)) && Math.abs(gy - v.pos.y) < 1) break;
   }
   a.yaw = v.yaw;
   if (bail) { a.push.set(v.vel.x * 0.7, 0, v.vel.z * 0.7); if (v.vel.length() > 6) { a.state = 'down'; a.downT = 1.2; G.damageActor(a, v.vel.length() * 0.8, null, 'fall'); } }
@@ -298,7 +322,7 @@ G.vehicleCollisions = (dt) => {
     const a = vs[i]; if (a.removed) continue;
     for (let j = i + 1; j < vs.length; j++) {
       const b = vs[j]; if (b.removed) continue;
-      const R = (a.L + b.L) / 2; if (G.d2(a.pos.x, a.pos.z, b.pos.x, b.pos.z) > R * R) continue;
+      const R = (a.L + b.L) / 2; if (G.d2(a.pos.x, a.pos.z, b.pos.x, b.pos.z) > R * R || Math.abs(a.pos.y - b.pos.y) > 2.5) continue;
       // circles along each car
       const ca = circles(a), cb = circles(b);
       let best = null;
@@ -331,7 +355,7 @@ G.vehicleCollisions = (dt) => {
     const sp = a.vel.length(); if (sp < 0.3) continue;
     for (const p of G.actors) {
       if (p.vehicle || p.removed) continue;
-      if (G.d2(p.pos.x, p.pos.z, a.pos.x, a.pos.z) > (a.L / 2 + 1) ** 2) continue;
+      if (G.d2(p.pos.x, p.pos.z, a.pos.x, a.pos.z) > (a.L / 2 + 1) ** 2 || Math.abs(p.pos.y - a.pos.y) > 2) continue;
       const s = Math.sin(a.yaw), c = Math.cos(a.yaw), dx = p.pos.x - a.pos.x, dz = p.pos.z - a.pos.z;
       const lz = dx * s + dz * c, lx = dx * c - dz * s;
       if (Math.abs(lx) < a.W / 2 + p.radius && Math.abs(lz) < a.L / 2 + p.radius) {
@@ -375,15 +399,15 @@ G.populateTraffic = () => {
     const nodes = G.roadGraph.buckets.near(px, pz, 220); if (!nodes.length) break;
     const n = G.pick(nodes); const d = Math.hypot(n.x - px, n.z - pz);
     if (d < 70 || d > 220 || !n.adj.length) continue;
-    const e = G.pick(n.adj); if (e.r && e.r.tu) continue;
+    const e = G.pick(n.adj);
     const big = e.r && (e.r.t === 'unclassified' || e.r.t === 'primary' || e.r.t === 'tertiary');
     const type = big && bus < 2 && Math.random() < 0.18 ? 'bus' : G.pick(TRAFFIC_TYPES);
     const lt = laneTarget(n, e.n, e.r);
     const yaw = Math.atan2(lt.dx, lt.dz);
     const x = n.x + lt.dz * 1.6, z = n.z - lt.dx * 1.6;
-    const v = new Vehicle(type, x, z, yaw);
+    const v = new Vehicle(type, x, z, yaw, n.y);
     if (v.blockedAt(x, z, yaw) || G.vehicles.some((o) => G.d2(o.pos.x, o.pos.z, x, z) < 64)) { v.remove(); continue; }
-    const drv = new G.Actor('civ', x, z); G.actors.push(drv);
+    const drv = new G.Actor('civ', x, z, n.y); G.actors.push(drv);
     v.ai = { mode: 'cruise', from: n, to: e.n, road: e.r, speedMul: G.rand(0.85, 1.1) };
     drv.vehicle = v; v.driver = drv; v.passengers.push(drv); drv.mesh.visible = false;
     v.vel.set(lt.dx * 6, 0, lt.dz * 6);

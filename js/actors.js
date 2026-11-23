@@ -5,11 +5,11 @@ const V3 = THREE.Vector3;
 const tmp = new V3();
 
 class Actor {
-  constructor(kind, x, z) {
+  constructor(kind, x, z, y) {
     this.kind = kind;
     this.mesh = G.makeHuman(kind); this.mesh.rotation.order = 'YXZ';
     this.parts = this.mesh.userData.parts;
-    this.pos = new V3(x, 0, z); this.push = new V3(); this.vy = 0;
+    this.pos = new V3(x, y !== undefined ? y : G.groundAt(x, z), z); this.push = new V3(); this.vy = 0;
     this.yaw = Math.random() * Math.PI * 2;
     this.maxHp = kind === 'cop' ? 110 : kind === 'player' ? 100 : 55;
     this.hp = this.maxHp; this.armor = 0;
@@ -24,6 +24,7 @@ class Actor {
   }
   remove() { G.scene.remove(this.mesh); this.removed = true; }
   chest() { return tmp.set(this.pos.x, this.pos.y + (this.dead || this.state === 'down' ? 0.25 : this.swim ? 0.3 : 1.25), this.pos.z); }
+  eye() { return new V3(this.pos.x, this.pos.y + 1.5, this.pos.z); }
   fwd() { return { x: Math.sin(this.yaw), z: Math.cos(this.yaw) }; }
   faceTo(x, z, dt, rate = 10) { const want = Math.atan2(x - this.pos.x, z - this.pos.z); this.yaw += G.angDiff(this.yaw, want) * Math.min(1, rate * dt); }
   // move with collision; returns blocked flag
@@ -63,11 +64,13 @@ class Actor {
   // -------- NPC brain --------
   think(dt) {
     this.t += dt; this.cool = Math.max(0, this.cool - dt); this.punchT = Math.max(0, this.punchT - dt);
-    if (this.dead) { this.deadT += dt; this.speedNow = 0; this.syncMesh(); this.animate(dt); return; }
+    if (this.dead) { this.deadT += dt; this.speedNow = 0; if (this.deadT < 6) G.settle(this, dt); this.syncMesh(); this.animate(dt); return; }
     if (this.vehicle) { this.pos.copy(this.vehicle.pos); return; }
     // knockback
     if (this.push.lengthSq() > 0.01) { this.walk(this.push.x * dt, this.push.z * dt); this.push.multiplyScalar(Math.max(0, 1 - dt * 5)); }
     const ox = this.pos.x, oz = this.pos.z;
+    const land = G.settle(this, dt);
+    if (land > 13) { G.damageActor(this, (land - 13) * 9, null, 'fall'); this.state = 'down'; this.downT = 1.5; }
     if (this.state === 'down') {
       this.downT -= dt; if (this.downT <= 0) { this.state = this.kind === 'cop' ? 'chase' : 'flee'; this.fleeT = 8; }
     } else if (this.kind === 'cop') this.copBrain(dt);
@@ -162,7 +165,7 @@ class Actor {
         this.faceTo(this.car.pos.x, this.car.pos.z, dt, 10); const f = this.fwd(); this.walk(f.x * 6 * dt, f.z * 6 * dt); return;
       }
     }
-    const los = G.lineOfSight(this.chest().clone(), new V3(tgtPos.x, 1.2, tgtPos.z));
+    const los = G.lineOfSight(this.chest().clone(), new V3(tgtPos.x, tgtPos.y + 1.2, tgtPos.z));
     this.aiming = false;
     if (wanted >= 2 && d < 30 && los) {
       this.aiming = true; this.faceTo(tgtPos.x, tgtPos.z, dt, 12);
@@ -185,10 +188,10 @@ G.Actor = Actor;
 // ---------------- player ----------------
 G.updatePlayer = (pl, dt, inp) => {
   pl.t += dt; pl.cool = Math.max(0, pl.cool - dt); pl.punchT = Math.max(0, pl.punchT - dt);
-  if (pl.dead) { pl.speedNow = 0; pl.syncMesh(); pl.animate(dt); return; }
+  if (pl.dead) { pl.speedNow = 0; G.settle(pl, dt); pl.syncMesh(); pl.animate(dt); return; }
   if (pl.vehicle) { pl.pos.copy(pl.vehicle.pos); pl.mesh.visible = false; return; }
   pl.mesh.visible = true;
-  if (pl.state === 'down') { pl.downT -= dt; if (pl.downT <= 0) pl.state = 'walk'; pl.syncMesh(); pl.animate(dt); return; }
+  if (pl.state === 'down') { pl.downT -= dt; if (pl.downT <= 0) pl.state = 'walk'; G.settle(pl, dt); pl.syncMesh(); pl.animate(dt); return; }
   const ox = pl.pos.x, oz = pl.pos.z;
   pl.swim = G.grid.get(pl.pos.x, pl.pos.z) === G.WATER;
   // camera-relative movement
@@ -205,9 +208,10 @@ G.updatePlayer = (pl, dt, inp) => {
   pl.aimPitch = -G.cam.pitch;
   if (ml > 0.01) pl.walk(mx * speed * dt, mz * speed * dt);
   if (pl.push.lengthSq() > 0.01) { pl.walk(pl.push.x * dt, pl.push.z * dt); pl.push.multiplyScalar(Math.max(0, 1 - dt * 5)); }
-  // jump
-  if (inp.jump && pl.pos.y <= 0.001 && !pl.swim) { pl.vy = 6.2; }
-  if (pl.pos.y > 0 || pl.vy > 0) { pl.vy -= 20 * dt; pl.pos.y += pl.vy * dt; if (pl.pos.y <= 0) { pl.pos.y = 0; pl.vy = 0; } }
+  // jump / gravity / falls (into the Underpass cutting, off walls...)
+  if (inp.jump && !pl.air && !pl.swim) { pl.vy = 6.2; pl.air = true; }
+  const land = G.settle(pl, dt);
+  if (land > 13) { G.damageActor(pl, (land - 13) * 9, null, 'fall'); if (land > 17) { pl.state = 'down'; pl.downT = 1.2; } }
   if (pl.swim && !pl.wasSwim) G.audio.splash();
   pl.wasSwim = pl.swim;
   const moved = Math.hypot(pl.pos.x - ox, pl.pos.z - oz);
@@ -223,7 +227,8 @@ G.updateFlow = (dt) => {
   flow.t -= dt; if (flow.t > 0) return; flow.t = 0.4;
   const pl = G.player; const tp = pl.vehicle ? pl.vehicle.pos : pl.pos;
   const cx = Math.round(tp.x), cz = Math.round(tp.z); flow.ox = cx - FR; flow.oz = cz - FR;
-  const d = flow.d, q = flow.q; d.fill(1e9);
+  const d = flow.d, q = flow.q; d.fill(1e9); flow.hg = flow.hg || new Float32Array(FS * FS); const hg = flow.hg; hg.fill(NaN);
+  const H = (k, i, j) => { let v = hg[k]; if (v !== v) { v = hg[k] = G.groundAt(flow.ox + i, flow.oz + j, tp.y + 0.6); } return v; };
   const start = FR * FS + FR; d[start] = 0; let qh = 0, qt = 0; q[qt++] = start;
   const N = [[1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1], [1, 1, 1.414], [1, -1, 1.414], [-1, 1, 1.414], [-1, -1, 1.414]];
   while (qh < qt) {
@@ -232,6 +237,7 @@ G.updateFlow = (dt) => {
       const ni = i + di, nj = j + dj; if (ni < 0 || nj < 0 || ni >= FS || nj >= FS) continue;
       const nk = nj * FS + ni; if (d[nk] <= dk + c) continue;
       if (!walkable(flow.ox + ni, flow.oz + nj)) continue;
+      if (Math.abs(H(nk, ni, nj) - H(k, i, j)) > 0.9) continue;  // walls, banks, the cutting
       if (di && dj && (!walkable(flow.ox + i + di, flow.oz + j) || !walkable(flow.ox + i, flow.oz + j + dj))) continue;
       d[nk] = dk + c; q[qt++] = nk;
       if (qt >= q.length) qt = q.length - 1;
@@ -256,7 +262,7 @@ G.panic = (x, z, r, chance = 0.8) => {
   for (const a of G.actors) {
     if (a.kind !== 'civ' || a.dead || a.vehicle || a.state === 'fight' || a.state === 'down') continue;
     const d = Math.hypot(a.pos.x - x, a.pos.z - z);
-    if (d < r && Math.random() < chance) {
+    if (d < r && Math.random() < chance && (G._panicY === undefined || Math.abs(a.pos.y - G._panicY) < 4 || d < 15)) {
       a.state = Math.random() < 0.15 && d < 12 ? 'cower' : 'flee'; a.fleeT = G.rand(6, 12); a.threat = new V3(x, 0, z); a.fleeDir = undefined;
       if (Math.random() < 0.2) G.audio.scream(d);
     }
@@ -281,7 +287,7 @@ G.populatePeds = () => {
     const n = G.pick(nodes); const d = Math.hypot(n.x - px, n.z - pz);
     if (d < 45 || d > 150) continue;
     if (G.grid.get(n.x, n.z) !== G.FREE) continue;
-    const a = new Actor('civ', n.x + G.rand(-1, 1), n.z + G.rand(-1, 1)); a.node = n; a.pickNextNode();
+    const a = new Actor('civ', n.x, n.z, n.y); a.node = n; a.pickNextNode();
     G.actors.push(a); civs++;
   }
 };

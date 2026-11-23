@@ -22,7 +22,7 @@ FX.spawn = (o) => {
   p.s.material.blending = o.add ? THREE.AdditiveBlending : THREE.NormalBlending;
   p.s.position.copy(o.pos); p.vel = o.vel ? o.vel.clone() : new THREE.Vector3();
   p.life = p.max = o.life || 1; p.size = o.size || 1; p.grow = o.grow || 0; p.grav = o.grav || 0; p.alpha = o.alpha == null ? 1 : o.alpha; p.drag = o.drag || 0;
-  p.s.scale.setScalar(p.size); p.s.material.opacity = p.alpha;
+  p.s.scale.setScalar(p.size); p.s.material.opacity = p.alpha; p.floor = o.grav ? o.pos.y - 1.3 : undefined;
   parts.push(p);
 };
 FX.update = (dt) => {
@@ -30,7 +30,7 @@ FX.update = (dt) => {
     const p = parts[i]; p.life -= dt;
     if (p.life <= 0) { p.s.visible = false; parts.splice(i, 1); pool.push(p); continue; }
     p.vel.y -= p.grav * dt; if (p.drag) p.vel.multiplyScalar(Math.max(0, 1 - p.drag * dt));
-    p.s.position.addScaledVector(p.vel, dt); if (p.s.position.y < 0.05 && p.grav > 0) { p.s.position.y = 0.05; p.vel.set(0, 0, 0); }
+    p.s.position.addScaledVector(p.vel, dt); if (p.grav > 0 && p.floor !== undefined && p.s.position.y < p.floor) { p.s.position.y = p.floor; p.vel.set(0, 0, 0); }
     const k = p.life / p.max; p.s.scale.setScalar(p.size + p.grow * (1 - k)); p.s.material.opacity = p.alpha * Math.min(1, k * 2);
   }
   for (let i = tracers.length - 1; i >= 0; i--) { const t = tracers[i]; t.life -= dt; if (t.life <= 0) { t.l.visible = false; tracers.splice(i, 1); tpool.push(t); } else t.l.material.opacity = t.life / 0.07; }
@@ -60,18 +60,19 @@ FX.explosion = (pos, r = 6) => {
   for (let i = 0; i < 26; i++) FX.spawn({ pos, vel: new THREE.Vector3(G.rand(-1, 1), G.rand(0.2, 1.2), G.rand(-1, 1)).multiplyScalar(r * 1.3), life: G.rand(0.4, 0.9), size: r * 0.4, grow: r * 0.5, color: G.pick([0xff6a00, 0xffa020, 0xffd060, 0xff3000]), add: true, drag: 3 });
   for (let i = 0; i < 18; i++) FX.spawn({ pos: pos.clone().add(new THREE.Vector3(0, 1, 0)), vel: new THREE.Vector3(G.rand(-1, 1), G.rand(0.6, 1.5), G.rand(-1, 1)).multiplyScalar(r * 0.7), life: G.rand(2, 3.5), size: r * 0.4, grow: r * 1.2, color: 0x2a2a2a, alpha: 0.7, drag: 1.5 });
   for (let i = 0; i < 14; i++) FX.spawn({ pos, vel: new THREE.Vector3(G.rand(-12, 12), G.rand(6, 16), G.rand(-12, 12)), life: 1.2, size: 0.2, color: 0x333333, grav: 20 });
-  FX.decal(pos.x, pos.z, r * 0.7, 0x111111, 0.7);
+  FX.decal(pos.x, pos.z, r * 0.7, 0x111111, 0.7, pos.y - 1);
 };
 const burns = [];
 FX.burn = (posFn, t) => burns.push({ pos: posFn, t });
 // ground decals (blood pools, scorch)
 const decals = [];
 let decalGeo = null;
-FX.decal = (x, z, r, color = 0x5a0000, opacity = 0.85) => {
+FX.decal = (x, z, r, color = 0x5a0000, opacity = 0.85, y) => {
+  const gy = G.groundAt(x, z, y === undefined ? 1e4 : y + 0.5);
   if (!decalGeo) { decalGeo = new THREE.CircleGeometry(1, 14); decalGeo.rotateX(-Math.PI / 2); }
   let d;
   if (decals.length > 60) { d = decals.shift(); } else { d = new THREE.Mesh(decalGeo, new THREE.MeshLambertMaterial({ color, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })); G.scene.add(d); }
   d.material.color.set(color); d.material.opacity = opacity;
-  d.position.set(x, 0.02 + Math.random() * 0.01, z); d.scale.setScalar(r * G.rand(0.8, 1.2)); d.rotation.y = Math.random() * 6; decals.push(d);
+  d.position.set(x, gy + 0.04 + Math.random() * 0.01, z); d.scale.setScalar(r * G.rand(0.8, 1.2)); d.rotation.y = Math.random() * 6; decals.push(d);
 };
 })();

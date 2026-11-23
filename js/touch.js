@@ -101,7 +101,7 @@ G.touchUpdate = (dt) => {
     if (a === pl || a.dead || a.vehicle || a.removed) continue;
     const cp = G.camera.position; const dx = a.pos.x - cp.x, dz = a.pos.z - cp.z, d = Math.hypot(dx, dz); if (d > 44 || G.dist(a.pos, pl.pos) < 1) continue;
     const off = Math.abs(G.angDiff(cy, Math.atan2(dx, dz))); const score = off + d * 0.002 - (a.kind === 'cop' ? 0.05 : 0);
-    if (score < bs && G.lineOfSight(new V3(pl.pos.x, 1.4, pl.pos.z), new V3(a.pos.x, 1.2, a.pos.z))) { bs = score; best = { a, d, yaw: Math.atan2(dx, dz) }; }
+    if (score < bs && G.lineOfSight(new V3(pl.pos.x, pl.pos.y + 1.4, pl.pos.z), new V3(a.pos.x, a.pos.y + 1.2, a.pos.z))) { bs = score; best = { a, d, yaw: Math.atan2(dx, dz) }; }
   }
   if (!best) return;
   const k = Math.min(1, dt * (aimOn ? 7 : 4));

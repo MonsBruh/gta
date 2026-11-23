@@ -41,7 +41,7 @@ H.update = (dt) => {
   // location
   H._locT = (H._locT || 0) - dt;
   if (H._locT <= 0) {
-    H._locT = 0.5; const L = G.locate(pl.pos.x, pl.pos.z);
+    H._locT = 0.5; const L = G.locate(pl.pos.x, pl.pos.z); if (G.inTunnel(pl.pos.x, pl.pos.z, pl.pos.y + 0.5)) { L.zone = 'The Underpass'; L.street = 'beneath Alexandra Square'; }
     if (L.zone !== lastZone || (L.street && L.street !== lastStreet)) { lastZone = L.zone; lastStreet = L.street || lastStreet; $('zonename').textContent = L.zone; $('streetname').textContent = L.street || ''; zoneT = 5; }
   }
   zoneT -= dt; $('zone').style.opacity = zoneT > 0 ? 1 : 0.0;

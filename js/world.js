@@ -97,6 +97,11 @@ G.buildWorld = async (status) => {
   const HW = D.half[0] + 40, HH = D.half[1] + 40;
   G.HW = HW; G.HH = HH;
   const rnd = G.mulberry(1964); // the year the university opened
+  const T = G.T; T.initUnderpass(D.roads); T.initStairs(D.roads); const U = T.U;
+  // a way that runs underground inside the Underpass box (vs. surface passages through buildings)
+  const isUnder = (r) => { if (!(r.ly && +r.ly < 0) && !(r.lv && /^-1/.test(r.lv))) return false; const n = r.p.length / 2, k = Math.floor(n / 2) * 2; return T.deck(r.p[k], r.p[k + 1], 1) !== null; };
+  G.isUnder = isUnder;
+  const surfY = (x, z) => G.groundAt(x, z);
 
   // ---------------- collision grid ----------------
   status('Rasterising collision…'); await tick();
@@ -146,9 +151,33 @@ G.buildWorld = async (status) => {
 
   // clear roads, tunnels and gaps (underpass, the Spine, building passages)
   for (const r of D.roads) {
+    if (isUnder(r)) continue;
     if (VEH_ROADS.has(r.t)) grid.stroke(r.p, Math.max(2.5, r.w - 0.8), G.FREE);
     else if (r.tu) grid.stroke(r.p, Math.max(2.2, r.w), G.FREE);
     else grid.stroke(r.p, Math.max(1.4, r.w * 0.8), G.FREE, (v) => v === G.BARRIER || v === G.WATER || v === G.TREE);
+  }
+
+  // Underpass: open cuttings are clear inside, with railings along the top; stairwells get railings too
+  if (U.ok) {
+    for (let i = 0; i < U.N; i++) {
+      if (!U.act[i]) continue;
+      const pnt = U.at(i), hw = U.hw[i];
+      if (!U.cov[i]) for (let t = -hw; t <= hw; t += 0.4) grid.set(pnt.x + pnt.lx * t, pnt.z + pnt.lz * t, G.FREE);
+      for (const sd of [-1, 1]) {
+        const side = sd > 0 ? U.Hl[i] : U.Hr[i];
+        if (!U.cov[i] && side - U.F[i] > 1.0 && !T.stairs.some((st) => st.side === sd && Math.abs(st.s - i) < st.wid + 0.5)) grid.disc(pnt.x + pnt.lx * sd * (hw + 0.35), pnt.z + pnt.lz * sd * (hw + 0.35), 0.3, G.BARRIER);
+      }
+    }
+    for (const st of T.stairs) {
+      for (let s2 = st.s - st.wid - 0.6; s2 <= st.s + st.wid + 0.6; s2 += 0.3) {
+        const pnt = U.at(s2);
+        for (let t = st.hw; t <= st.hw + st.len + 3; t += 0.3) {
+          const x = pnt.x + pnt.lx * st.side * t, z = pnt.z + pnt.lz * st.side * t;
+          const edge = Math.abs(s2 - st.s) > st.wid;
+          grid.set(x, z, edge && t > st.hw + 2.5 && t < st.hw + st.len ? G.BARRIER : edge ? grid.get(x, z) : G.FREE);
+        }
+      }
+    }
   }
 
   // ---------------- ground texture ----------------
@@ -184,13 +213,13 @@ G.buildWorld = async (status) => {
   }
   for (const a of D.areas) if (a.k === 'water') drawArea(a, AREA_COL.water);
   // paths
-  const pathRoads = D.roads.filter((r) => !VEH_ROADS.has(r.t));
+  const pathRoads = D.roads.filter((r) => !VEH_ROADS.has(r.t) && !isUnder(r));
   for (const r of pathRoads) { ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = r.w + 0.5; ctx.beginPath(); linePath(ctx, r.p); ctx.stroke(); }
   for (const r of pathRoads) { ctx.strokeStyle = PATH_COL[r.t] || '#c8bfae'; ctx.lineWidth = r.w; ctx.beginPath(); linePath(ctx, r.p); ctx.stroke(); }
   for (const r of pathRoads) if (r.t === 'steps') { ctx.strokeStyle = 'rgba(60,50,40,0.5)'; ctx.lineWidth = r.w; ctx.setLineDash([0.12, 0.35]); ctx.lineCap = 'butt'; ctx.beginPath(); linePath(ctx, r.p); ctx.stroke(); ctx.setLineDash([]); ctx.lineCap = 'round'; }
   // vehicle roads: kerb, asphalt, markings
-  const vroads = D.roads.filter((r) => VEH_ROADS.has(r.t) && !r.tu).sort((a, b) => a.w - b.w);
-  const troads = D.roads.filter((r) => VEH_ROADS.has(r.t) && r.tu);
+  const vroads = D.roads.filter((r) => VEH_ROADS.has(r.t) && !isUnder(r)).sort((a, b) => a.w - b.w);
+  const troads = D.roads.filter((r) => VEH_ROADS.has(r.t) && isUnder(r));
   for (const r of vroads) { ctx.strokeStyle = '#9d9a92'; ctx.lineWidth = r.w + (r.t === 'service' ? 0.4 : 1.4); ctx.beginPath(); linePath(ctx, r.p); ctx.stroke(); }
   for (const r of vroads) { ctx.strokeStyle = r.tu ? '#2c2c30' : r.t === 'living_street' ? '#5a5650' : '#45464b'; ctx.lineWidth = r.w; ctx.beginPath(); linePath(ctx, r.p); ctx.stroke(); }
   for (const r of vroads) {
@@ -212,7 +241,62 @@ G.buildWorld = async (status) => {
   const nx = Math.ceil(2 * HW / TILE_M), nz = Math.ceil(2 * HH / TILE_M);
   const groundMat = [];
   const maxAniso = G.renderer.capabilities.getMaxAnisotropy();
-  const tileGeo = new THREE.PlaneGeometry(TILE_M, TILE_M); tileGeo.rotateX(-Math.PI / 2);
+  const CELL = G.mobile ? 8 : 4;
+  // fine 1 m patch around the Underpass so the cutting, walls and stairs are crisp
+  const PB = U.ok ? [Math.floor((U.bb[0] + HW) / CELL) * CELL - HW, Math.floor((U.bb[1] + HH) / CELL) * CELL - HH, Math.ceil((U.bb[2] + HW) / CELL) * CELL - HW, Math.ceil((U.bb[3] + HH) / CELL) * CELL - HH] : null;
+  const inPatch = (x0, z0, x1, z1) => PB && x0 >= PB[0] - 1e-6 && z0 >= PB[1] - 1e-6 && x1 <= PB[2] + 1e-6 && z1 <= PB[3] + 1e-6;
+  const edgeH = (x, z) => { // heights on the patch border match the coarse mesh (no cracks)
+    const onX = Math.abs(x - PB[0]) < 1e-6 || Math.abs(x - PB[2]) < 1e-6, onZ = Math.abs(z - PB[1]) < 1e-6 || Math.abs(z - PB[3]) < 1e-6;
+    if (onX) { const za = PB[1] + Math.floor((z - PB[1]) / CELL) * CELL, k = (z - za) / CELL; return T.mesh(x, za) * (1 - k) + T.mesh(x, za + CELL) * k; }
+    if (onZ) { const xa = PB[0] + Math.floor((x - PB[0]) / CELL) * CELL, k = (x - xa) / CELL; return T.mesh(xa, z) * (1 - k) + T.mesh(xa + CELL, z) * k; }
+    return T.mesh(x, z);
+  };
+  // deck (Alexandra Square over the tunnel) quads, drawn with the ground texture
+  const deckQuads = [];
+  if (U.ok) for (let i = 0; i + 1 < U.N; i++) {
+    if (!U.cov[i] || !U.cov[i + 1]) continue;
+    const a = U.at(i), b = U.at(i + 1), W = Math.max(U.hw[i], U.hw[i + 1]) + 2.6;
+    for (let t = -W; t < W - 1e-6; t += 1) {
+      const t1 = Math.min(W, t + 1);
+      const P = (pp, ii, tt) => [pp.x + pp.lx * tt, U.Hr[ii] + (U.Hl[ii] - U.Hr[ii]) * G.clamp((tt + U.hw[ii] + 3.5) / (2 * (U.hw[ii] + 3.5)), 0, 1), pp.z + pp.lz * tt];
+      deckQuads.push([P(a, i, t), P(b, i + 1, t), P(b, i + 1, t1), P(a, i, t1)]);
+    }
+  }
+  const terrainTile = (x0, z0, mat) => {
+    const pos = [], uv = [], idx = [], map = new Map();
+    const vid = (x, z, fine) => {
+      const k = Math.round((x - x0) * 2) * 4096 + Math.round((z - z0) * 2);
+      let v = map.get(k); if (v !== undefined) return v;
+      v = pos.length / 3; pos.push(x, fine ? edgeH(x, z) : T.mesh(x, z), z); uv.push((x - x0) / TILE_M, 1 - (z - z0) / TILE_M); map.set(k, v); return v;
+    };
+    for (let cx = 0; cx < TILE_M; cx += CELL) for (let cz = 0; cz < TILE_M; cz += CELL) {
+      const ax = x0 + cx, az = z0 + cz;
+      if (inPatch(ax, az, ax + CELL, az + CELL)) {
+        for (let fx = 0; fx < CELL; fx++) for (let fz = 0; fz < CELL; fz++) {
+          const a = vid(ax + fx, az + fz, true), b = vid(ax + fx + 1, az + fz, true), c = vid(ax + fx + 1, az + fz + 1, true), d = vid(ax + fx, az + fz + 1, true);
+          idx.push(a, d, b, b, d, c);
+        }
+      } else {
+        const a = vid(ax, az), b = vid(ax + CELL, az), c = vid(ax + CELL, az + CELL), d = vid(ax, az + CELL);
+        idx.push(a, d, b, b, d, c);
+      }
+    }
+    // deck slab top over the tunnel
+    for (const qd of deckQuads) {
+      const cx = (qd[0][0] + qd[2][0]) / 2, cz = (qd[0][2] + qd[2][2]) / 2;
+      if (cx < x0 || cx >= x0 + TILE_M || cz < z0 || cz >= z0 + TILE_M) continue;
+      const base = pos.length / 3;
+      for (const v of qd) { pos.push(v[0], v[1] + 0.01, v[2]); uv.push((v[0] - x0) / TILE_M, 1 - (v[2] - z0) / TILE_M); }
+      // make the quad face up
+      const ux = qd[1][0] - qd[0][0], uz = qd[1][2] - qd[0][2], vx = qd[3][0] - qd[0][0], vz = qd[3][2] - qd[0][2];
+      if (uz * vx - ux * vz > 0) idx.push(base, base + 1, base + 2, base, base + 2, base + 3); else idx.push(base, base + 2, base + 1, base, base + 3, base + 2);
+    }
+    // skirt along the outer world edge so you never see under the map
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx); g.computeVertexNormals(); g.computeBoundingSphere();
+    const mesh = new THREE.Mesh(g, mat); mesh.receiveShadow = true; return mesh;
+  };
   for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) {
     const c = document.createElement('canvas'); c.width = c.height = TILE_PX;
     const cc = c.getContext('2d'); cc.fillStyle = '#6a9a46'; cc.fillRect(0, 0, TILE_PX, TILE_PX);
@@ -220,12 +304,21 @@ G.buildWorld = async (status) => {
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = Math.min(8, maxAniso);
     t.generateMipmaps = true; t.minFilter = THREE.LinearMipmapLinearFilter;
     const m = new THREE.MeshLambertMaterial({ map: t }); groundMat.push(m);
-    const mesh = new THREE.Mesh(tileGeo, m);
-    mesh.position.set(-HW + (i + 0.5) * TILE_M, 0, -HH + (j + 0.5) * TILE_M); mesh.receiveShadow = true;
-    scene.add(mesh);
+    scene.add(terrainTile(-HW + i * TILE_M, -HH + j * TILE_M, m));
+    if (j % 2 === 1) await tick();
   }
+  // distant countryside: a big low ring that meets the terrain edge height
+  const edgeAvg = (T.base(-HW, 0) + T.base(HW, 0) + T.base(0, -HH) + T.base(0, HH)) / 4;
   const outer = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x5e8a3e }));
-  outer.position.y = -0.08; scene.add(outer);
+  outer.position.y = Math.min(edgeAvg, T.minH) - 3; scene.add(outer);
+  { // skirt walls around the playable area hide the drop to the outer plane
+    const SK = new GeoBuilder(); const sc2 = hex('#5e8a3e');
+    const y0 = outer.position.y - 1, stp = 8;
+    const run = (ax, az, bx, bz) => { const L = Math.hypot(bx - ax, bz - az), n = Math.ceil(L / stp); for (let k = 0; k < n; k++) { const x1 = ax + (bx - ax) * k / n, z1 = az + (bz - az) * k / n, x2 = ax + (bx - ax) * (k + 1) / n, z2 = az + (bz - az) * (k + 1) / n; SK.quad([x1, y0, z1], [x2, y0, z2], [x2, T.mesh(x2, z2), z2], [x1, T.mesh(x1, z1), z1], null, sc2); } };
+    const X1 = -HW + nx * TILE_M, Z1 = -HH + nz * TILE_M;
+    run(-HW, -HH, X1, -HH); run(X1, -HH, X1, Z1); run(X1, Z1, -HW, Z1); run(-HW, Z1, -HW, -HH);
+    scene.add(SK.mesh(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })));
+  }
 
   // minimap canvas (1 px / m) with buildings
   const MS = 1;
@@ -272,8 +365,11 @@ G.buildWorld = async (status) => {
   const allB = [...D.buildings.filter((b) => !b.hp), ...D.parts];
   for (const b of allB) {
     const r = G.mulberry(G.hash(b.p.join(',').slice(0, 40)));
-    const wc = wallColour(b), base = b.mh || 0, top = Math.max(base + 0.5, b.h);
-    const plain = PLAIN.has(b.t) || (top - base) < 3;
+    let gMin = Infinity, gSum = 0, gN = 0;
+    for (let k = 0; k < b.p.length; k += 2) { const gh = T.base(b.p[k], b.p[k + 1]); gMin = Math.min(gMin, gh); gSum += gh; gN++; }
+    const gAvg = gSum / gN;
+    const wc = wallColour(b), base = b.mh > 0 ? gAvg + b.mh : gMin - 0.8, top = gAvg + Math.max((b.mh || 0) + 0.5, b.h);
+    const plain = PLAIN.has(b.t) || (b.h - (b.mh || 0)) < 3;
     const W = plain ? BP : BW;
     const rings = [b.p, ...(b.hl || [])];
     rings.forEach((p, ri) => {
@@ -285,7 +381,7 @@ G.buildWorld = async (status) => {
         // outward normal: for ccw outer ring (dz,-dx)
         let nxn = outwardFlip ? dz / L : -dz / L, nzn = outwardFlip ? -dx / L : dx / L;
         const A = [ax, base, az], B = [bx, base, bz], C = [bx, top, bz], Dd = [ax, top, az];
-        const u0 = acc / 5.2, u1 = (acc + L) / 5.2, v0 = base / 6.6, v1 = top / 6.6; acc += L;
+        const u0 = acc / 5.2, u1 = (acc + L) / 5.2, v0 = (base - gAvg) / 6.6, v1 = (top - gAvg) / 6.6; acc += L;
         const col = jitter(wc, r, 0.03);
         // triangle (A,B,C) faces (-dz,dx)
         const faceN = [-dz / L, 0, dx / L];
@@ -318,7 +414,7 @@ G.buildWorld = async (status) => {
         const ny = (B.y - A.y) * (C.x - A.x) - (B.x - A.x) * (C.y - A.y);
         if (ny < 0) { const tmp = A; A = B; B = tmp; }
         BR.tri([A.x, top, A.y], [B.x, top, B.y], [C.x, top, C.y], [0, 1, 0], rc);
-        if (base > 0.1) BR.tri([B.x, base, B.y], [A.x, base, A.y], [C.x, base, C.y], [0, -1, 0], rc);
+        if (b.mh > 0) BR.tri([B.x, base, B.y], [A.x, base, A.y], [C.x, base, C.y], [0, -1, 0], rc);
       }
     }
     if (b.n || b.t === 'university' || b.t === 'residential') {
@@ -347,13 +443,19 @@ G.buildWorld = async (status) => {
         const open = grid.get(x, z) !== G.BARRIER;
         if (!open && s0 === null) s0 = s;
         if ((open || s === n) && s0 !== null) {
-          const e = open ? s : s; if (e > s0) HB.box(ax + (bx - ax) * s0 / n, az + (bz - az) * s0 / n, ax + (bx - ax) * e / n, az + (bz - az) * e / n, spec[0], 0, spec[1] * (l.k === 'hedge' ? G.rand(0.9, 1.15) : 1), jitter(spec[2], rnd, 0.06));
+          const hh = spec[1] * (l.k === 'hedge' ? G.rand(0.9, 1.15) : 1), colr = jitter(spec[2], rnd, 0.06);
+          for (let q0 = s0; q0 < s; q0 += 2) {
+            const q1 = Math.min(s, q0 + 2);
+            const x0b = ax + (bx - ax) * q0 / n, z0b = az + (bz - az) * q0 / n, x1b = ax + (bx - ax) * q1 / n, z1b = az + (bz - az) * q1 / n;
+            const g0 = Math.min(surfY(x0b, z0b), surfY(x1b, z1b)), g1 = Math.max(surfY(x0b, z0b), surfY(x1b, z1b));
+            HB.box(x0b, z0b, x1b, z1b, spec[0], g0 - 0.3, g1 + hh, colr);
+          }
           s0 = null;
         }
       }
     }
   }
-  for (const l of D.lines) if (l.k === 'rail') { const p = l.p; for (let k = 0; k + 3 < p.length; k += 2) { HB.box(p[k], p[k + 1], p[k + 2], p[k + 3], 0.1, 0.05, 0.25, railC); } }
+  for (const l of D.lines) if (l.k === 'rail') { const p = l.p; for (let k = 0; k + 3 < p.length; k += 2) { const L = Math.hypot(p[k + 2] - p[k], p[k + 3] - p[k + 1]), n = Math.max(1, Math.ceil(L / 4)); for (let q2 = 0; q2 < n; q2++) { const xa = p[k] + (p[k + 2] - p[k]) * q2 / n, za = p[k + 1] + (p[k + 3] - p[k + 1]) * q2 / n, xb = p[k] + (p[k + 2] - p[k]) * (q2 + 1) / n, zb = p[k + 1] + (p[k + 3] - p[k + 1]) * (q2 + 1) / n; const gy = (T.base(xa, za) + T.base(xb, zb)) / 2; HB.box(xa, za, xb, zb, 0.1, gy + 0.05, gy + 0.25, railC); } } }
   { const m = HB.mesh(new THREE.MeshLambertMaterial({ vertexColors: true })); m.castShadow = true; m.receiveShadow = true; scene.add(m); }
 
   // ---------------- trees mesh ----------------
@@ -367,7 +469,7 @@ G.buildWorld = async (status) => {
   const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3(), col = new THREE.Color();
   let ci = 0, ki = 0;
   trees.forEach((t, i) => {
-    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * 6.28); sc.set(t[2], t[2] * G.rand(0.85, 1.2), t[2]); ps.set(t[0], 0, t[1]);
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * 6.28); sc.set(t[2], t[2] * G.rand(0.85, 1.2), t[2]); ps.set(t[0], T.phys(t[0], t[1]) - 0.1, t[1]);
     mtx.compose(ps, q, sc); trunkM.setMatrixAt(i, mtx);
     const conifer = (i % 4 === 3) && ki < nConif;
     col.setHSL(conifer ? 0.33 : G.rand(0.2, 0.3), G.rand(0.35, 0.55), conifer ? G.rand(0.16, 0.22) : G.rand(0.22, 0.34));
@@ -385,10 +487,12 @@ G.buildWorld = async (status) => {
     if (p.k === 'street_lamp') lamps.push(p); else if (p.k === 'bench') benches.push(p); else if (p.k === 'bollard') bollards.push(p);
     else if (p.k === 'waste_basket' || p.k === 'recycling') bins.push(p); else if (p.k === 'bus_stop') stops.push(p);
   }
+  const propY = (p) => (p.k === 'bus_stop' && T.deck(p.x, p.z) !== null) ? T.phys(p.x, p.z) : surfY(p.x, p.z);
+  G.propY = propY;
   const inst = (geo, mat, list, f, shadow = true) => {
     if (!list.length) return null;
     const m = new THREE.InstancedMesh(geo, mat, list.length);
-    list.forEach((p, i) => { const r = f ? f(p) : rnd() * 6.28; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), r); mtx.compose(new THREE.Vector3(p.x, 0, p.z), q, new THREE.Vector3(1, 1, 1)); m.setMatrixAt(i, mtx); });
+    list.forEach((p, i) => { const r = f ? f(p) : rnd() * 6.28; q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), r); mtx.compose(new THREE.Vector3(p.x, propY(p), p.z), q, new THREE.Vector3(1, 1, 1)); m.setMatrixAt(i, mtx); });
     m.castShadow = shadow; m.frustumCulled = false; scene.add(m); return m;
   };
   const lampGeo = new THREE.CylinderGeometry(0.07, 0.1, 5.5, 5); lampGeo.translate(0, 2.75, 0);
@@ -408,10 +512,10 @@ G.buildWorld = async (status) => {
   const shelter = new GeoBuilder(); const glassC = hex('#9fc0cc'), frameC = hex('#30343a');
   for (const s of stops) {
     // orient along nearest road
-    const x = s.x, z = s.z;
-    shelter.box(x - 1.6, z - 0.7, x + 1.6, z - 0.7, 0.06, 0, 2.4, glassC);
-    shelter.box(x - 1.6, z - 0.7, x - 1.6, z + 0.6, 0.06, 0, 2.4, glassC);
-    shelter.box(x - 1.7, z, x + 1.7, z, 1.6, 2.4, 2.55, frameC);
+    const x = s.x, z = s.z, y = propY(s);
+    shelter.box(x - 1.6, z - 0.7, x + 1.6, z - 0.7, 0.06, y, y + 2.4, glassC);
+    shelter.box(x - 1.6, z - 0.7, x - 1.6, z + 0.6, 0.06, y, y + 2.4, glassC);
+    shelter.box(x - 1.7, z, x + 1.7, z, 1.6, y + 2.4, y + 2.55, frameC);
   }
   if (stops.length) { const m = shelter.mesh(new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.85 })); m.castShadow = true; scene.add(m); }
 
@@ -419,26 +523,26 @@ G.buildWorld = async (status) => {
   G.labels = [];
   for (const b of G.buildingList) if (b.n) {
     const s = G.makeLabel(b.n, { size: 2.2 }); s.position.set(b.x, b.h + 2.4, b.z); s.visible = false; scene.add(s);
-    G.labels.push({ s, x: b.x, z: b.z, r: 110 });
+    G.labels.push({ s, x: b.x, z: b.z, r: 110, y: b.h });
   }
   const POI_KINDS = new Set(['cafe', 'bar', 'pub', 'fast_food', 'restaurant', 'convenience', 'newsagent', 'bakery', 'pharmacy', 'theatre', 'gallery', 'artwork', 'post_office', 'charity', 'library', 'place', 'community_centre', 'bus_stop', 'beverages', 'hairdresser', 'laundry', 'bicycle', 'studio', 'study_room', 'copyshop', 'doctors', 'fuel']);
   for (const p of D.pois) if (p.n && POI_KINDS.has(p.k) && Math.abs(p.x) < HW && Math.abs(p.z) < HH) {
-    const s = G.makeLabel(p.n, { size: 0.9, depthTest: false, accent: '#5fd0ff', bg: 'rgba(10,20,30,0.6)' }); s.position.set(p.x, 3.2, p.z); s.visible = false; scene.add(s);
-    G.labels.push({ s, x: p.x, z: p.z, r: 32 });
+    const s = G.makeLabel(p.n, { size: 0.9, depthTest: false, accent: '#5fd0ff', bg: 'rgba(10,20,30,0.6)' }); const py = propY(p); s.position.set(p.x, py + 3.2, p.z); s.visible = false; scene.add(s);
+    G.labels.push({ s, x: p.x, z: p.z, r: 32, y: py, under: G.inTunnel(p.x, p.z, py + 0.5) });
   }
 
   // ---------------- graphs ----------------
   status('Mapping roads and footpaths…'); await tick();
   const mkGraph = (filter) => {
     const nodes = new Map();
-    const get = (id, x, z) => { let n = nodes.get(id); if (!n) nodes.set(id, n = { id, x, z, adj: [] }); return n; };
+    const get = (id, x, z, r) => { let n = nodes.get(id); if (!n) nodes.set(id, n = { id, x, z, adj: [], y: isUnder(r) ? T.phys(x, z) : surfY(x, z) }); return n; };
     for (const r of D.roads) {
       if (!filter(r)) continue;
       const n = r.p.length / 2; const ids = r.ids && r.ids.length === n ? r.ids : null;
       let prev = null;
       for (let i = 0; i < n; i++) {
         const x = r.p[i * 2], z = r.p[i * 2 + 1];
-        const node = get(ids ? ids[i] : `${x.toFixed(1)},${z.toFixed(1)}`, x, z);
+        const node = get(ids ? ids[i] : `${x.toFixed(1)},${z.toFixed(1)}`, x, z, r);
         if (prev && prev !== node) {
           const len = Math.hypot(node.x - prev.x, node.z - prev.z);
           prev.adj.push({ n: node, len, r });
@@ -472,6 +576,8 @@ G.buildWorld = async (status) => {
   G.namedRoads = D.roads.filter((r) => r.n);
   G.roadBuckets = new G.Buckets(60);
   for (const r of G.namedRoads) for (let i = 0; i < r.p.length; i += 2) G.roadBuckets.add(r.p[i], r.p[i + 1], r);
+
+  if (U.ok) { status('Digging the Underpass…'); await tick(); G.buildUnderpass(); }
 
   // ---------------- landmarks ----------------
   const find = (name) => {

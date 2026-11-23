@@ -12,18 +12,15 @@ G.WEAPONS = {
 G.WEAPON_ORDER = ['fists', 'pistol', 'smg', 'shotgun', 'rpg'];
 
 // ---------------- line of sight / ray casting ----------------
-G.lineOfSight = (a, b, ignoreLow) => {
-  const f = G.grid.march(a.x, a.z, b.x, b.z, ignoreLow ? G.solidForCam : G.solidForShot);
-  return f >= 1;
-};
+G.lineOfSight = (a, b, ignoreLow) => G.march3(a, b, ignoreLow ? G.solidForCam : G.solidForShot, 0.6) >= 1;
 // returns {t, point, actor, vehicle, heli, head}
 G.raycast = (o, d, range, ignore) => {
   let best = { t: range, kind: 'none' };
   // world (2D march, buildings treated as tall)
-  const ex = o.x + d.x * range, ez = o.z + d.z * range;
-  const hf = G.grid.march(o.x, o.z, ex, ez, G.solidForShot);
-  if (hf < 1) best = { t: hf * range, kind: 'wall' };
-  if (d.y < -0.001) { const tg = -o.y / d.y; if (tg < best.t) best = { t: tg, kind: 'ground' }; }
+  // world: buildings, terrain, the Underpass deck & walls (3D march)
+  const end = new V3(o.x + d.x * range, o.y + d.y * range, o.z + d.z * range);
+  const hf = G.march3(o, end, G.solidForShot, 0.4);
+  if (hf < 1) best = { t: hf * range, kind: G.pointSolid(o.x + d.x * (hf * range + 0.4), o.y + d.y * (hf * range + 0.4), o.z + d.z * (hf * range + 0.4)) ? 'ground' : 'wall' };
   // people: two spheres
   for (const a of G.actors) {
     if (a === ignore || a.vehicle || a.removed) continue;
@@ -44,7 +41,7 @@ G.raycast = (o, d, range, ignore) => {
     if (v.removed || (ignore && ignore.vehicle === v)) continue;
     const dx = v.pos.x - o.x, dz = v.pos.z - o.z; if (dx * dx + dz * dz > (best.t + v.L) ** 2) continue;
     const s = Math.sin(v.yaw), c = Math.cos(v.yaw);
-    const lo = { x: (o.x - v.pos.x) * c - (o.z - v.pos.z) * s, y: o.y, z: (o.x - v.pos.x) * s + (o.z - v.pos.z) * c };
+    const lo = { x: (o.x - v.pos.x) * c - (o.z - v.pos.z) * s, y: o.y - v.pos.y, z: (o.x - v.pos.x) * s + (o.z - v.pos.z) * c };
     const ld = { x: d.x * c - d.z * s, y: d.y, z: d.x * s + d.z * c };
     const mn = [-v.W / 2, 0.2, -v.L / 2], mx = [v.W / 2, v.spec.H, v.L / 2];
     let t0 = 0, t1 = best.t; const oo = [lo.x, lo.y, lo.z], dd = [ld.x, ld.y, ld.z]; let ok = true;
@@ -82,12 +79,12 @@ G.damageActor = (a, dmg, by, type) => {
   if (a.hp <= 0) {
     a.hp = 0; a.dead = true; a.state = 'dead'; a.deadT = 0; a.aiming = false;
     if (a.vehicle) G.exitVehicle(a, false);
-    G.fx.decal(a.pos.x, a.pos.z, 0.8);
+    G.fx.decal(a.pos.x, a.pos.z, 0.8, undefined, undefined, a.pos.y);
     if (a !== G.player) {
       if (by === G.player) G.police.crime(a.kind === 'cop' ? 'killcop' : 'kill', a.pos);
       const cash = a.kind === 'cop' ? G.randi(20, 60) : G.randi(4, 45);
-      G.spawnPickup('cash', a.pos.x + G.rand(-0.4, 0.4), a.pos.z + G.rand(-0.4, 0.4), { amount: cash, temp: 30 });
-      if (a.kind === 'cop' && Math.random() < 0.6) G.spawnPickup('pistol', a.pos.x + 0.5, a.pos.z, { ammo: 12, temp: 30 });
+      G.spawnPickup('cash', a.pos.x + G.rand(-0.4, 0.4), a.pos.z + G.rand(-0.4, 0.4), { amount: cash, temp: 30, y: a.pos.y });
+      if (a.kind === 'cop' && Math.random() < 0.6) G.spawnPickup('pistol', a.pos.x + 0.5, a.pos.z, { ammo: 12, temp: 30, y: a.pos.y });
       G.panic(a.pos.x, a.pos.z, 25, 0.9);
     }
   }
@@ -99,6 +96,7 @@ G.melee = (att, dmg) => {
   for (const a of G.actors) {
     if (a === att || a.vehicle || a.dead || a.removed) continue;
     const dx = a.pos.x - att.pos.x, dz = a.pos.z - att.pos.z, d = Math.hypot(dx, dz);
+    if (Math.abs(a.pos.y - att.pos.y) > 1.5) continue;
     if (d < bd && (dx * f.x + dz * f.z) / (d || 1) > 0.35) { bd = d; best = a; }
   }
   G.audio.whoosh();
@@ -121,7 +119,7 @@ G.melee = (att, dmg) => {
 // hitscan bullet
 const bulletHit = (shooter, o, d, w, accuracyBonus) => {
   const hit = G.raycast(o, d, w.range, shooter);
-  const muzzle = shooter.vehicle ? new V3(shooter.pos.x, 1.4, shooter.pos.z) : new V3(shooter.pos.x + Math.sin(shooter.yaw) * 0.5 - Math.cos(shooter.yaw) * 0.3, shooter.pos.y + 1.4, shooter.pos.z + Math.cos(shooter.yaw) * 0.5 + Math.sin(shooter.yaw) * 0.3);
+  const muzzle = shooter.vehicle ? new V3(shooter.pos.x, shooter.pos.y + 1.4, shooter.pos.z) : new V3(shooter.pos.x + Math.sin(shooter.yaw) * 0.5 - Math.cos(shooter.yaw) * 0.3, shooter.pos.y + 1.4, shooter.pos.z + Math.cos(shooter.yaw) * 0.5 + Math.sin(shooter.yaw) * 0.3);
   G.fx.tracer(muzzle, hit.point, shooter.kind === 'cop' ? 0xffb0a0 : 0xffe9a0);
   if (hit.kind === 'actor') {
     const dmg = w.dmg * (hit.head ? 2.5 : 1);
@@ -149,12 +147,12 @@ G.playerFire = (pl) => {
   inv.clip--; pl.cool = w.rate;
   const camO = G.camera.position.clone(); const camD = new V3(); G.camera.getWorldDirection(camD);
   // start ray at the player's depth so we don't hit things behind them
-  const toPl = new V3(pl.pos.x - camO.x, 1.4 - camO.y, pl.pos.z - camO.z).dot(camD);
+  const toPl = new V3(pl.pos.x - camO.x, pl.pos.y + 1.4 - camO.y, pl.pos.z - camO.z).dot(camD);
   const o = camO.clone().addScaledVector(camD, Math.max(0, toPl));
   const n = w.pellets || 1;
   let muzzle;
   if (w.rocket) {
-    const mz = new V3(pl.pos.x, 1.5, pl.pos.z).addScaledVector(camD, 0.8);
+    const mz = new V3(pl.pos.x, pl.pos.y + 1.5, pl.pos.z).addScaledVector(camD, 0.8);
     G.fireRocket(mz, camD.clone(), pl);
     G.audio.shot('rpg', 0); G.fx.muzzle(mz, true);
   } else {
@@ -181,7 +179,7 @@ G.reload = (pl) => {
 G.npcShoot = (npc, tgt, acc) => {
   const w = G.WEAPONS[npc.weapon] || G.WEAPONS.pistol;
   const o = npc.chest().clone(); o.y += 0.15;
-  const tp = tgt.vehicle ? new V3(tgt.vehicle.pos.x, 1.0, tgt.vehicle.pos.z) : new V3(tgt.pos.x, tgt.pos.y + 1.2, tgt.pos.z);
+  const tp = tgt.vehicle ? new V3(tgt.vehicle.pos.x, tgt.vehicle.pos.y + 1.0, tgt.vehicle.pos.z) : new V3(tgt.pos.x, tgt.pos.y + 1.2, tgt.pos.z);
   const d = tp.clone().sub(o); const dist = d.length(); d.normalize();
   const miss = (1 - acc) * 0.12 + dist * 0.0015 + (tgt.speedNow || 0) * 0.006;
   d.add(new V3(G.rand(-miss, miss), G.rand(-miss, miss) * 0.6, G.rand(-miss, miss))).normalize();
@@ -194,7 +192,7 @@ G.explode = (pos, r, dmg, by, src) => {
   G.fx.explosion(pos, r * 0.6); G.audio.explosion(G.camDist(pos)); G.shake(Math.max(0, 1.2 - G.camDist(pos) / 60));
   for (const a of G.actors) {
     if (a.removed) continue;
-    const d = Math.hypot(a.pos.x - pos.x, a.pos.z - pos.z); if (d > r) continue;
+    const d = Math.hypot(a.pos.x - pos.x, a.pos.z - pos.z, (a.pos.y + 1 - pos.y) * 1.5); if (d > r) continue;
     const k = 1 - d / r;
     if (a.vehicle) continue;
     a.push.set((a.pos.x - pos.x) / (d || 1) * 14 * k, 0, (a.pos.z - pos.z) / (d || 1) * 14 * k);
@@ -203,7 +201,7 @@ G.explode = (pos, r, dmg, by, src) => {
   }
   for (const v of G.vehicles) {
     if (v === src || v.removed) continue;
-    const d = Math.hypot(v.pos.x - pos.x, v.pos.z - pos.z); if (d > r * 1.3) continue;
+    const d = Math.hypot(v.pos.x - pos.x, v.pos.z - pos.z, (v.pos.y + 1 - pos.y) * 1.5); if (d > r * 1.3) continue;
     const k = 1 - d / (r * 1.3);
     v.vel.x += (v.pos.x - pos.x) / (d || 1) * 10 * k; v.vel.z += (v.pos.z - pos.z) / (d || 1) * 10 * k;
     v.lastHitBy = by; v.damage(dmg * 8 * k, by);
@@ -249,8 +247,9 @@ const pickupModel = (kind) => {
   return g;
 };
 G.spawnPickup = (kind, x, z, opts = {}) => {
-  const m = pickupModel(kind); m.position.set(x, 0.7, z); G.scene.add(m);
-  const p = { kind, x, z, m, opts, active: true, respawn: 0 };
+  const y = opts.y !== undefined ? opts.y : G.groundAt(x, z);
+  const m = pickupModel(kind); m.position.set(x, y + 0.7, z); G.scene.add(m);
+  const p = { kind, x, y, z, m, opts, active: true, respawn: 0 };
   if (opts.temp) p.ttl = opts.temp;
   G.pickups.push(p); return p;
 };
@@ -259,9 +258,9 @@ G.updatePickups = (dt) => {
   for (let i = G.pickups.length - 1; i >= 0; i--) {
     const p = G.pickups[i];
     if (!p.active) { p.respawn -= dt; if (p.respawn <= 0) { p.active = true; p.m.visible = true; } continue; }
-    p.m.rotation.y += dt * 2; p.m.position.y = 0.75 + Math.sin(G.time * 3 + i) * 0.1;
+    p.m.rotation.y += dt * 2; p.m.position.y = p.y + 0.75 + Math.sin(G.time * 3 + i) * 0.1;
     if (p.ttl !== undefined) { p.ttl -= dt; if (p.ttl <= 0) { G.scene.remove(p.m); G.pickups.splice(i, 1); continue; } }
-    if (pl.dead || Math.hypot(pl.pos.x - p.x, pl.pos.z - p.z) > (pl.vehicle ? 2.4 : 1.2)) continue;
+    if (pl.dead || Math.abs(pl.pos.y - p.y) > 2 || Math.hypot(pl.pos.x - p.x, pl.pos.z - p.z) > (pl.vehicle ? 2.4 : 1.2)) continue;
     let took = true;
     if (p.kind === 'cash') { G.addMoney(p.opts.amount); G.audio.cash(); }
     else if (p.kind === 'health') { if (pl.hp >= pl.maxHp) took = false; else { pl.hp = pl.maxHp; G.hud.notify('Health restored'); G.audio.pickup(); } }
@@ -290,9 +289,9 @@ G.setupShops = () => {
     const f = G.grid.nearestFree(p.x, p.z, (v) => v === G.FREE, 30);
     if (Math.hypot(f.x - p.x, f.z - p.z) > 30) continue;
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.05, 24).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd34a, transparent: true, opacity: 0.8, depthWrite: false }));
-    ring.position.set(f.x, 0.05, f.z); G.scene.add(ring);
-    const lbl = G.makeLabel('$ ' + p.n, { size: 0.7, depthTest: false, accent: '#3fbf5a' }); lbl.position.set(f.x, 2.4, f.z); G.scene.add(lbl);
-    G.shops.push({ n: p.n, x: f.x, z: f.z, ring, lbl, cooldown: 0, prog: 0 });
+    const gy = G.groundAt(f.x, f.z); ring.position.set(f.x, gy + 0.06, f.z); G.scene.add(ring);
+    const lbl = G.makeLabel('$ ' + p.n, { size: 0.7, depthTest: false, accent: '#3fbf5a' }); lbl.position.set(f.x, gy + 2.4, f.z); G.scene.add(lbl);
+    G.shops.push({ n: p.n, x: f.x, y: gy, z: f.z, ring, lbl, cooldown: 0, prog: 0 });
   }
 };
 G.updateShops = (dt) => {
@@ -301,7 +300,7 @@ G.updateShops = (dt) => {
     s.cooldown = Math.max(0, s.cooldown - dt);
     const sd = Math.hypot(pl.pos.x - s.x, pl.pos.z - s.z); s.ring.visible = s.cooldown <= 0 && sd < 80; s.lbl.visible = s.cooldown <= 0 && sd < 40;
     s.ring.rotation.y += dt;
-    const near = !pl.vehicle && !pl.dead && Math.hypot(pl.pos.x - s.x, pl.pos.z - s.z) < 1.6 && s.cooldown <= 0;
+    const near = !pl.vehicle && !pl.dead && Math.abs(pl.pos.y - s.y) < 2 && Math.hypot(pl.pos.x - s.x, pl.pos.z - s.z) < 1.6 && s.cooldown <= 0;
     if (near && pl.weapon !== 'fists' && pl.aiming) {
       s.prog += dt; active = s;
       if (s.prog >= 4) {

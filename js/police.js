@@ -31,10 +31,10 @@ P.update = (dt) => {
   if (pl.dead) { P.arrest = 0; return; }
   if (P.stars === 0) { P.heat = Math.max(0, P.heat - dt * 2); P.arrest = 0; return; }
   // can any cop see the player?
-  const tp = pl.vehicle ? pl.vehicle.pos : pl.pos; const eye = new V3(tp.x, 1.3, tp.z);
+  const tp = pl.vehicle ? pl.vehicle.pos : pl.pos; const eye = new V3(tp.x, tp.y + 1.3, tp.z);
   let seen = false;
-  for (const a of G.actors) if (a.kind === 'cop' && !a.dead && G.dist(a.pos, tp) < 70 && G.lineOfSight(new V3(a.pos.x, 1.5, a.pos.z), eye, true)) { seen = true; break; }
-  if (!seen) for (const v of G.vehicles) if (v.type === 'police' && v.driver && v.driver !== pl && !v.dead && G.dist(v.pos, tp) < 60 && G.lineOfSight(new V3(v.pos.x, 1.4, v.pos.z), eye, true)) { seen = true; break; }
+  for (const a of G.actors) if (a.kind === 'cop' && !a.dead && G.dist(a.pos, tp) < 70 && G.lineOfSight(new V3(a.pos.x, a.pos.y + 1.5, a.pos.z), eye, true)) { seen = true; break; }
+  if (!seen) for (const v of G.vehicles) if (v.type === 'police' && v.driver && v.driver !== pl && !v.dead && G.dist(v.pos, tp) < 60 && G.lineOfSight(new V3(v.pos.x, v.pos.y + 1.4, v.pos.z), eye, true)) { seen = true; break; }
   if (G.heli && !G.heli.dead && G.dist(G.heli.pos, tp) < 60) seen = true;
   P.seen = seen;
   // stars only fade while you're hidden from units that are actually searching nearby
@@ -62,14 +62,14 @@ function spawnCopCar() {
     const d = Math.hypot(n.x - tp.x, n.z - tp.z); if (d < 80 || d > 190) continue;
     const e = G.pick(n.adj); if (!e) continue;
     const yaw = Math.atan2(e.n.x - n.x, e.n.z - n.z);
-    const v = new G.Vehicle(P.stars >= 4 && Math.random() < 0.4 ? 'van' : 'police', n.x, n.z, yaw);
+    const v = new G.Vehicle(P.stars >= 4 && Math.random() < 0.4 ? 'van' : 'police', n.x, n.z, yaw, n.y);
     if (v.type === 'van') { v.siren = true; v.mesh.traverse((o) => { if (o.isMesh && o.material && o.material.color && !Array.isArray(o.material)) { /* keep */ } }); }
     if (v.blockedAt(n.x, n.z, yaw)) { v.remove(); continue; }
     v.copUnit = true; v.sirenOn = true;
     G.vehicles.push(v);
     const crew = v.type === 'van' ? 3 : 2;
     for (let i = 0; i < crew; i++) {
-      const c = new G.Actor('cop', n.x, n.z); c.car = v; c.vehicle = v; c.mesh.visible = false;
+      const c = new G.Actor('cop', n.x, n.z, n.y); c.car = v; c.vehicle = v; c.mesh.visible = false;
       if (P.stars >= 4 && i > 0) { c.weapon = 'smg'; G.setGunModel(c.mesh, 'smg'); }
       v.passengers.push(c); G.actors.push(c);
     }
@@ -83,7 +83,7 @@ function spawnCopCar() {
 function spawnHeli() {
   const m = G.makeHeli(); const pl = G.player;
   const a = Math.random() * 6.28;
-  const h = { m, pos: new V3(pl.pos.x + Math.cos(a) * 200, 60, pl.pos.z + Math.sin(a) * 200), hp: 700, dead: false, cool: 2, vel: new V3(), orbit: Math.random() * 6 };
+  const h = { m, pos: new V3(pl.pos.x + Math.cos(a) * 200, pl.pos.y + 60, pl.pos.z + Math.sin(a) * 200), hp: 700, dead: false, cool: 2, vel: new V3(), orbit: Math.random() * 6 };
   m.position.copy(h.pos); G.scene.add(m); G.heli = h;
 }
 G.heliDamage = (d, by) => {
@@ -97,7 +97,7 @@ G.updateHeli = (dt) => {
   if (h.dead) {
     h.fallV += 20 * dt; h.pos.y -= h.fallV * dt; h.m.rotation.y += dt * 5; h.m.rotation.z += dt;
     if (Math.random() < dt * 40) G.fx.smoke(h.pos, true);
-    if (h.pos.y <= 1) { G.explode(h.pos.clone().setY(1), 10, 200, G.player, null); G.scene.remove(h.m); G.heli = null; }
+    const hg = G.groundAt(h.pos.x, h.pos.z); if (h.pos.y <= hg + 1) { G.explode(h.pos.clone().setY(hg + 1), 10, 200, G.player, null); G.scene.remove(h.m); G.heli = null; }
     h.m.position.copy(h.pos); return;
   }
   const tp = pl.vehicle ? pl.vehicle.pos : pl.pos;
@@ -109,7 +109,7 @@ G.updateHeli = (dt) => {
     return;
   }
   h.orbit += dt * 0.25;
-  const goal = new V3(tp.x + Math.cos(h.orbit) * 28, 34, tp.z + Math.sin(h.orbit) * 28);
+  const goal = new V3(tp.x + Math.cos(h.orbit) * 28, Math.max(tp.y, G.groundAt(tp.x + Math.cos(h.orbit) * 28, tp.z + Math.sin(h.orbit) * 28)) + 34, tp.z + Math.sin(h.orbit) * 28);
   const want = goal.sub(h.pos); const dist = want.length();
   want.normalize().multiplyScalar(Math.min(28, dist * 0.8));
   h.vel.lerp(want, Math.min(1, dt * 1.5)); h.pos.addScaledVector(h.vel, dt);
@@ -119,7 +119,7 @@ G.updateHeli = (dt) => {
   p.spot.intensity = G.clock.night ? 300 : 0; p.spot.target.position.set(0, -40, 10);
   // shoot at 4+ stars
   h.cool -= dt;
-  if (P.stars >= 4 && h.cool <= 0 && G.lineOfSight(h.pos, new V3(tp.x, 1, tp.z), true)) {
+  if (P.stars >= 4 && h.cool <= 0 && G.lineOfSight(h.pos, new V3(tp.x, tp.y + 1, tp.z), true)) {
     h.cool = 0.12; h.burst = (h.burst || 0) + 1; if (h.burst > 8) { h.burst = 0; h.cool = 2.2; }
     const fake = { pos: new V3(h.pos.x, h.pos.y - 2.5, h.pos.z), yaw: 0, kind: 'cop', vehicle: null, weapon: 'smg', chest: () => new V3(h.pos.x, h.pos.y - 2.5, h.pos.z) };
     G.npcShoot(fake, pl, 0.4);
@@ -143,7 +143,7 @@ G.respawn = (spot, why) => {
   const pl = G.player;
   if (pl.vehicle) G.exitVehicle(pl, false);
   pl.dead = false; pl.hp = pl.maxHp; pl.armor = 0; pl.state = 'walk'; pl.downT = 0; pl.mesh.rotation.x = 0;
-  pl.pos.set(spot.x, 0, spot.z); pl.push.set(0, 0, 0);
+  pl.pos.set(spot.x, G.groundAt(spot.x, spot.z), spot.z); pl.push.set(0, 0, 0); pl.vy = 0; pl.air = false;
   const fee = why === 'wasted' ? Math.min(pl.money, 100) : Math.min(pl.money, 150);
   G.addMoney(-fee);
   // lose weapons (keep fists and a few bullets)

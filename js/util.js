@@ -121,13 +121,16 @@ G.solidForCam = (v) => v === G.BUILDING;
 
 // Circle movement with axis sliding. Returns true if blocked on any axis.
 G.moveCircle = (pos, dx, dz, r) => {
-  const g = G.grid; let hit = false;
+  const g = G.grid; let hit = false; const y = pos.y || 0;
+  // grid solids don't apply inside the Underpass tunnel; walls there come from the height step
+  const solid = (x, z) => !(G.inTunnel && G.inTunnel(x, z, y)) && G.solidForWalk(g.get(x, z));
+  const step = (x, z) => G.groundAt && G.groundAt(x, z, y + 0.6) > y + 0.75;
   const blocked = (x, z) => {
-    if (G.solidForWalk(g.get(x, z))) return true;
-    for (let a = 0; a < 8; a++) { const an = a * Math.PI / 4; if (G.solidForWalk(g.get(x + Math.cos(an) * r, z + Math.sin(an) * r))) return true; }
+    if (solid(x, z) || step(x, z)) return true;
+    for (let a = 0; a < 8; a++) { const an = a * Math.PI / 4, sx = x + Math.cos(an) * r, sz = z + Math.sin(an) * r; if (solid(sx, sz) || (a % 2 === 0 && step(sx, sz))) return true; }
     return false;
   };
-  if (blocked(pos.x, pos.z)) { // stuck inside: push out
+  if (solid(pos.x, pos.z)) { // stuck inside: push out
     const f = g.nearestFree(pos.x, pos.z, (v) => !G.solidForWalk(v), 6); pos.x = f.x; pos.z = f.z; return true;
   }
   if (!blocked(pos.x + dx, pos.z)) pos.x += dx; else hit = true;

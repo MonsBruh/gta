@@ -84,7 +84,7 @@ function enterExit() {
   if (pl.vehicle) { const v = pl.vehicle; G.exitVehicle(pl, Math.abs(v.speed) > 7); G.cam.yaw = v.yaw; return; }
   let best = null, bd = 3.2;
   for (const v of G.vehicles) {
-    if (v.removed || v.dead || v.sinkT > 0) continue;
+    if (v.removed || v.dead || v.sinkT > 0 || Math.abs(v.pos.y - pl.pos.y) > 1.8) continue;
     const s = Math.sin(v.yaw), c = Math.cos(v.yaw), dx = pl.pos.x - v.pos.x, dz = pl.pos.z - v.pos.z;
     const lz = dx * s + dz * c, lx = dx * c - dz * s;
     const ex = Math.max(0, Math.abs(lx) - v.W / 2), ez = Math.max(0, Math.abs(lz) - v.L / 2); const d = Math.hypot(ex, ez);
@@ -129,17 +129,19 @@ function updateWorldTime(dt) {
   sun.color.setHSL(0.1, 0.6, G.lerp(0.75, 0.9, day));
   const ang = (c.hour - 6) / 12 * Math.PI;
   const p = G.player.pos;
-  sun.position.set(p.x + Math.cos(ang) * 120 + 30, Math.max(25, Math.sin(Math.abs(ang)) * 160), p.z + 60); sun.target.position.set(p.x, 0, p.z);
+  sun.position.set(p.x + Math.cos(ang) * 120 + 30, p.y + Math.max(25, Math.sin(Math.abs(ang)) * 160), p.z + 60); sun.target.position.set(p.x, p.y, p.z);
   const nightK = G.clamp(-alt * 4 + 0.3, 0, 1);
   G.windowMat.emissiveIntensity = nightK * 0.9; G.lampMat.emissiveIntensity = nightK * 2.5;
   if (!rain) makeRain();
   rain.visible = rainK > 0.05; rain.material.opacity = 0.45 * rainK;
   if (rain.visible) {
-    const arr = rain.geometry.attributes.position.array, drops = rain.userData.drops, cx = camera.position.x, cz = camera.position.z;
+    const arr = rain.geometry.attributes.position.array, drops = rain.userData.drops, cx = camera.position.x, cz = camera.position.z, cy = camera.position.y;
+    const underRoof = G.T.deck(cx, cz, 2.5) !== null && cy < G.T.deck(cx, cz, 2.5);
+    rain.visible = !underRoof;
     for (let i = 0; i < drops.length; i++) {
       const d = drops[i]; d[1] -= dt * 22; if (d[1] < 0) { d[0] = G.rand(-40, 40); d[1] = 30; d[2] = G.rand(-40, 40); }
-      const x = cx + d[0], z = cz + d[2];
-      arr[i * 6] = x; arr[i * 6 + 1] = d[1]; arr[i * 6 + 2] = z; arr[i * 6 + 3] = x + 0.05; arr[i * 6 + 4] = d[1] + 0.7; arr[i * 6 + 5] = z;
+      const x = cx + d[0], z = cz + d[2], yy = cy - 10 + d[1];
+      arr[i * 6] = x; arr[i * 6 + 1] = yy; arr[i * 6 + 2] = z; arr[i * 6 + 3] = x + 0.05; arr[i * 6 + 4] = yy + 0.7; arr[i * 6 + 5] = z;
     }
     rain.geometry.attributes.position.needsUpdate = true;
   }
@@ -155,7 +157,7 @@ function updateCamera(dt) {
     const v = pl.vehicle;
     if (cm.mouseT <= 0 && Math.abs(v.speed) > 2) { const want = v.speed >= 0 ? v.yaw : v.yaw; cm.yaw += G.angDiff(cm.yaw, want) * Math.min(1, dt * 2.5); cm.pitch = G.lerp(cm.pitch, 0.2, dt * 2); }
     dist = 5.5 + v.L * 0.6 + Math.min(4, Math.abs(v.speed) * 0.06); h = v.spec.H + 0.6;
-    target = new V3(v.pos.x, h, v.pos.z);
+    target = new V3(v.pos.x, v.pos.y + h, v.pos.z);
   } else {
     dist = pl.aiming ? 2.6 : 4.6; shoulder = pl.aiming ? 0.55 : 0.3;
     target = new V3(pl.pos.x, pl.pos.y + (pl.swim ? 0.6 : 1.6), pl.pos.z);
@@ -166,9 +168,11 @@ function updateCamera(dt) {
   cm.curDist = G.lerp(cm.curDist, dist, Math.min(1, dt * 6));
   let want = target.clone().addScaledVector(f, -cm.curDist).addScaledVector(right, shoulder);
   // collide with buildings
-  const k = G.grid.march(target.x, target.z, want.x, want.z, G.solidForCam);
-  if (k < 1) { const kk = Math.max(0.1, k - 0.08); want = target.clone().lerp(want, kk); }
-  if (want.y < 0.35) want.y = 0.35;
+  // keep the camera out of buildings, hills, and inside the tunnel when you're down there
+  const k = G.march3(target, want, G.solidForCam, 0.3);
+  if (k < 1) { const kk = Math.max(0.05, k - 0.06); want = target.clone().lerp(want, kk); }
+  const gy = G.groundAt(want.x, want.z, want.y);
+  if (want.y < gy + 0.35) want.y = gy + 0.35;
   camera.position.copy(want);
   if (cm.shake > 0) { camera.position.add(new V3(G.rand(-1, 1), G.rand(-1, 1), G.rand(-1, 1)).multiplyScalar(cm.shake * 0.15)); cm.shake = Math.max(0, cm.shake - dt * 2.5); }
   camera.lookAt(want.clone().add(f));
@@ -257,7 +261,7 @@ function update(dt) {
   updateWorldTime(dt);
   updateCamera(dt);
   labelT -= dt;
-  if (labelT <= 0) { labelT = 0.3; const cx = camera.position.x, cz = camera.position.z; for (const l of G.labels) l.s.visible = G.d2(l.x, l.z, cx, cz) < l.r * l.r; }
+  if (labelT <= 0) { labelT = 0.3; const cx = camera.position.x, cz = camera.position.z, camIn = G.inTunnel(cx, cz, camera.position.y); for (const l of G.labels) l.s.visible = G.d2(l.x, l.z, cx, cz) < l.r * l.r && (camIn ? !!l.under : !l.under); }
   if (G.waypoint && Math.hypot(G.waypoint.x - pl.pos.x, G.waypoint.z - pl.pos.z) < 12) { G.waypoint = null; G.hud.notify('Waypoint reached'); }
   // audio
   let sirenDist = null; for (const v of G.vehicles) if (v.sirenOn && !v.dead) { const d = G.camDist(v.pos); if (sirenDist === null || d < sirenDist) sirenDist = d; }
