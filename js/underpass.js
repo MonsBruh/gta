@@ -93,7 +93,7 @@ G.buildUnderpass = () => {
       const pp = U.at(st.s + e * (st.wid + 0.1));
       const P = (t, yy) => [pp.x + pp.lx * st.side * t, yy, pp.z + pp.lz * st.side * t];
       const y0 = st.bot - 0.3, yTop = st.top + 1.0;
-      B.quad(P(st.hw, y0), P(st.hw + st.len, y0), P(st.hw + st.len, yTop), P(st.hw, yTop), null, concrete);
+      B.quad(P(Math.max(st.hw, st.hwc), y0), P(st.hw + st.len, y0), P(st.hw + st.len, yTop), P(Math.max(st.hw, st.hwc), yTop), null, concrete);
     }
   }
   const mk = (b, mat, shadow) => { const m = b.mesh(mat); m.castShadow = shadow; m.receiveShadow = true; G.scene.add(m); return m; };

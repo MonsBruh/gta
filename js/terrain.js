@@ -124,7 +124,7 @@ const fillAt = (l, b) => {
 T.surf = (x, z) => { const b = T.base(x, z), l = T.locate(x, z); return l ? fillAt(l, b) : b; };
 // stairs from Alexandra Square down to the underground bus stop (from OSM steps tagged level=-1;0)
 T.stairs = [];
-T.initStairs = (roads) => {
+T.initStairs = (roads, grid) => {
   if (!U.ok) return;
   for (const r of roads) {
     if (r.t !== 'steps' || !(r.lv && r.lv.includes('-1'))) continue;
@@ -132,9 +132,19 @@ T.initStairs = (roads) => {
     const l = T.locate(mx, mz); if (!l || !U.cov[l.i]) continue;
     const s0 = l.s, side = Math.sign(l.t) || 1;
     if (T.stairs.some((st) => Math.abs(st.s - s0) < 12)) continue;
-    const hw = U.hw[l.i], len = 9.5, wid = 1.7;
-    const p = U.at(s0), tx = p.x + p.lx * side * (hw + len + 0.5), tz = p.z + p.lz * side * (hw + len + 0.5);
-    T.stairs.push({ s: s0, side, hw, len, wid, top: T.surf(tx, tz), bot: floorAt(s0) });
+    const hwc = U.hw[l.i], wid = 1.7, GAP = 1.6;
+    // find the wall of the building beyond the stairwell, so the stairs end with a short walkway out onto the square
+    let edge = hwc + 12;
+    if (grid) {
+      outer: for (let t = hwc + 4; t <= hwc + 14; t += 0.25) for (const ds of [-wid, 0, wid]) {
+        const q = U.at(s0 + ds); if (grid.get(q.x + q.lx * side * t, q.z + q.lz * side * t) === G.BUILDING) { edge = t; break outer; }
+      }
+    }
+    const top = edge - GAP;
+    // start a little way onto the platform if needed, keeping the flight at a walkable pitch (>= 7.5 m for ~6 m rise)
+    const start = Math.max(3.9, Math.min(hwc, top - 9.5, top - 7.5));
+    const p = U.at(s0), tx = p.x + p.lx * side * (top + 0.4), tz = p.z + p.lz * side * (top + 0.4);
+    T.stairs.push({ s: s0, side, hw: start, hwc, len: top - start, wid, top: T.surf(tx, tz), bot: floorAt(s0), edge });
   }
 };
 const stairAt = (l) => {
@@ -149,8 +159,8 @@ const stairAt = (l) => {
 T.phys = (x, z) => {
   const l = T.locate(x, z);
   if (l) {
-    if (U.act[l.i] && Math.abs(l.t) <= U.hw[l.i]) return floorAt(l.s);
     const sh = stairAt(l); if (sh !== null) return sh;
+    if (U.act[l.i] && Math.abs(l.t) <= U.hw[l.i]) return floorAt(l.s);
     return fillAt(l, T.base(x, z));
   }
   return T.base(x, z);
@@ -159,8 +169,8 @@ T.phys = (x, z) => {
 T.mesh = (x, z) => {
   const l = T.locate(x, z);
   if (l) {
-    if (U.act[l.i] && Math.abs(l.t) <= U.hw[l.i] + 1.6) return floorAt(l.s);
     const sh = stairAt(l); if (sh !== null) return sh;
+    if (U.act[l.i] && Math.abs(l.t) <= U.hw[l.i] + 1.6) return floorAt(l.s);
     return fillAt(l, T.base(x, z));
   }
   return T.base(x, z);
@@ -186,7 +196,7 @@ G.pointSolid = (x, y, z, gridFn) => {
     if (y <= dk - 0.75) {                              // inside the tunnel box
       const l = T.locate(x, z);
       if (Math.abs(l.t) > U.hw[l.i]) { const sh = stairAt(l); return sh === null || y < sh; } // walls / stairwell
-      return y < floorAt(l.s);
+      const sh = stairAt(l); return y < (sh !== null ? sh : floorAt(l.s));
     }
   }
   if (y < T.phys(x, z) - 0.15) return true;

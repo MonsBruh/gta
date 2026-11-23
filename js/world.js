@@ -97,7 +97,7 @@ G.buildWorld = async (status) => {
   const HW = D.half[0] + 40, HH = D.half[1] + 40;
   G.HW = HW; G.HH = HH;
   const rnd = G.mulberry(1964); // the year the university opened
-  const T = G.T; T.initUnderpass(D.roads); T.initStairs(D.roads); const U = T.U;
+  const T = G.T; T.initUnderpass(D.roads); const U = T.U;
   // a way that runs underground inside the Underpass box (vs. surface passages through buildings)
   const isUnder = (r) => { if (!(r.ly && +r.ly < 0) && !(r.lv && /^-1/.test(r.lv))) return false; const n = r.p.length / 2, k = Math.floor(n / 2) * 2; return T.deck(r.p[k], r.p[k + 1], 1) !== null; };
   G.isUnder = isUnder;
@@ -112,6 +112,7 @@ G.buildWorld = async (status) => {
     if (b.t === 'roof' || b.mh > 0) continue;
     grid.fillRings([b.p, ...(b.hl || [])], G.BUILDING);
   }
+  T.initStairs(D.roads, grid); // needs the building footprints to keep a walkway at the top
   for (const l of D.lines) {
     if (l.k === 'hedge') grid.stroke(l.p, 1.0, G.BARRIER);
     else if (l.k === 'wall') grid.stroke(l.p, 0.5, G.BARRIER);
@@ -165,7 +166,7 @@ G.buildWorld = async (status) => {
       if (!U.cov[i]) for (let t = -hw; t <= hw; t += 0.4) grid.set(pnt.x + pnt.lx * t, pnt.z + pnt.lz * t, G.FREE);
       for (const sd of [-1, 1]) {
         const side = sd > 0 ? U.Hl[i] : U.Hr[i];
-        if (!U.cov[i] && side - U.F[i] > 1.0 && !T.stairs.some((st) => st.side === sd && Math.abs(st.s - i) < st.wid + 0.5)) grid.disc(pnt.x + pnt.lx * sd * (hw + 0.35), pnt.z + pnt.lz * sd * (hw + 0.35), 0.3, G.BARRIER);
+        if (!U.cov[i] && side - U.F[i] > 1.0) grid.disc(pnt.x + pnt.lx * sd * (hw + 0.35), pnt.z + pnt.lz * sd * (hw + 0.35), 0.3, G.BARRIER);
       }
     }
     // parapets on the deck above each tunnel mouth (a real 6 m drop into the cutting)
@@ -178,10 +179,11 @@ G.buildWorld = async (status) => {
     for (const st of T.stairs) {
       for (let s2 = st.s - st.wid - 0.6; s2 <= st.s + st.wid + 0.6; s2 += 0.3) {
         const pnt = U.at(s2);
-        for (let t = st.hw; t <= st.hw + st.len + 3; t += 0.3) {
+        for (let t = st.hw; t <= st.edge - 0.3; t += 0.3) {
           const x = pnt.x + pnt.lx * st.side * t, z = pnt.z + pnt.lz * st.side * t;
           const edge = Math.abs(s2 - st.s) > st.wid;
-          grid.set(x, z, edge && t > st.hw + 2.5 && t < st.hw + st.len ? G.BARRIER : edge ? grid.get(x, z) : G.FREE);
+          if (edge) { if (t > st.hwc + 2.5 && t < st.hw + st.len - 0.2) grid.set(x, z, G.BARRIER); }
+          else if (grid.get(x, z) !== G.BUILDING || t <= st.hw + st.len) grid.set(x, z, G.FREE);
         }
       }
     }
