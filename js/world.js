@@ -141,7 +141,26 @@ G.buildWorld = async (status) => {
     }
   }
   T.initStairs(D.roads, grid); // needs the building footprints to keep a walkway at the top
+  const rampLine = D.lines.find((l) => {
+    if (l.k !== 'wall') return false; const bb = G.bbox(l.p); let L = 0; for (let k = 0; k + 3 < l.p.length; k += 2) L += Math.hypot(l.p[k + 2] - l.p[k], l.p[k + 3] - l.p[k + 1]);
+    return bb[0] > -56 && bb[2] < -18 && bb[1] > -200 && bb[3] < -170 && L > 40;
+  });
+  if (rampLine) {
+    let pts = rampLine.p.slice(); if (pts[0] > pts[pts.length - 2]) { const r = []; for (let k = pts.length - 2; k >= 0; k -= 2) r.push(pts[k], pts[k + 1]); pts = r; } // west (left) -> east (right)
+    // one constant gradient: flush with the ground at the left (west) end, never dipping into the lawn,
+    // and at least 1.8 m up at the right (east) end
+    let L = 0; const samples = [];
+    for (let k = 0; k + 3 < pts.length; k += 2) { const ax = pts[k], az = pts[k + 1], bx = pts[k + 2], bz = pts[k + 3], l = Math.hypot(bx - ax, bz - az), n = Math.max(1, Math.ceil(l / 0.5));
+      const vx = -(bz - az) / l * 0.8, vz = (bx - ax) / l * 0.8;
+      for (let q = 0; q <= n; q++) { const x = ax + (bx - ax) * q / n, z = az + (bz - az) * q / n; samples.push([L + l * q / n, Math.max(T.base(x, z), T.base(x + vx, z + vz), T.base(x - vx, z - vz))]); }
+      L += l; }
+    const ya = T.base(pts[0], pts[1]) + 0.05;
+    let grad = (samples[samples.length - 1][1] + 1.8 - ya) / L;
+    for (const [sd, gh] of samples) if (sd > 2) grad = Math.max(grad, (gh + 0.12 - ya) / sd);
+    G._ramp = T.addRamp(pts, 1.6, ya, ya + grad * L); G._ramp.line = rampLine;
+  }
   for (const l of D.lines) {
+    if (G._ramp && l === G._ramp.line) continue;  // walkable ramp, not a wall
     if (l.k === 'hedge') grid.stroke(l.p, 1.0, G.BARRIER);
     else if (l.k === 'wall') grid.stroke(l.p, 0.5, G.BARRIER);
     else if (l.k === 'fence') grid.stroke(l.p, 0.3, G.BARRIER);
@@ -149,6 +168,59 @@ G.buildWorld = async (status) => {
   for (const r of D.roads) {
     const veh = VEH_ROADS.has(r.t);
     roadGrid.stroke(r.p, r.w + (veh ? 0.5 : 0), veh ? 1 : 2, veh ? null : (v) => v === 0);
+  }
+  // put the building back on the parts of the removed section that are plain grass; paths, walkways and
+  // paved areas stay open (traced from a 0.5 m mask into simplified outlines)
+  G._greenFill = [];
+  for (const rm of REMOVE) {
+    const b = D.buildings.find((x) => x.n === rm.n); if (!b) continue;
+    const PAVED = new Set(['plaza', 'paved', 'parking', 'yard', 'water', 'tank']);
+    const hard = D.areas.filter((a) => PAVED.has(a.k) || a.k.startsWith('pitch')).map((a) => ({ a, bb: G.bbox(a.p) }));
+    const onHard = (x, z) => hard.some((h) => x >= h.bb[0] && x <= h.bb[2] && z >= h.bb[1] && z <= h.bb[3] && G.pip(x, z, h.a.p) && !(h.a.hl && h.a.hl.some((q) => G.pip(x, z, q))));
+    const nearPath = (x, z) => { for (let dz = -0.7; dz <= 0.71; dz += 0.35) for (let dx = -0.7; dx <= 0.71; dx += 0.35) if (roadGrid.get(x + dx, z + dz) !== 0) return true; return false; };
+    const [bx0, bz0, bx1, bz1] = G.bbox(b.p), C = 0.5, ox = Math.floor(bx0) - 1, oz = Math.floor(bz0) - 1, nx = Math.ceil((bx1 - ox) / C) + 2, nz = Math.ceil((bz1 - oz) / C) + 2;
+    const M = new Uint8Array(nx * nz);
+    for (let j = 1; j < nz - 1; j++) for (let i = 1; i < nx - 1; i++) {
+      const x = ox + (i + 0.5) * C, z = oz + (j + 0.5) * C;
+      if (rm.keep.some((k) => k[0] * x + k[1] * z <= k[2]) || !G.pip(x, z, b.p)) continue;     // only inside the removed section
+      if (grid.get(x, z) !== G.FREE || nearPath(x, z) || onHard(x, z)) continue;               // only plain grass
+      M[j * nx + i] = 1;
+    }
+    // drop tiny islands (< 6 m2)
+    const seen = new Uint8Array(nx * nz);
+    for (let k0 = 0; k0 < M.length; k0++) { if (!M[k0] || seen[k0]) continue; const st = [k0], comp = []; seen[k0] = 1; while (st.length) { const k = st.pop(); comp.push(k); for (const nb of [k - 1, k + 1, k - nx, k + nx]) if (M[nb] && !seen[nb]) { seen[nb] = 1; st.push(nb); } } if (comp.length * C * C < 6) for (const k of comp) M[k] = 0; }
+    // boundary edges (interior on the right in x-right / z-down), chained into loops
+    const edges = new Map(), key = (i, j) => i * 100000 + j;
+    const addE = (i0, j0, i1, j1) => { const k = key(i0, j0); if (!edges.has(k)) edges.set(k, []); edges.get(k).push([i1, j1]); };
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { if (!M[j * nx + i]) continue;
+      if (!M[(j - 1) * nx + i]) addE(i, j, i + 1, j); if (!M[j * nx + i + 1]) addE(i + 1, j, i + 1, j + 1);
+      if (!M[(j + 1) * nx + i]) addE(i + 1, j + 1, i, j + 1); if (!M[j * nx + i - 1]) addE(i, j + 1, i, j); }
+    const loops = [];
+    for (const [k0] of edges) { while (edges.get(k0) && edges.get(k0).length) {
+      let ci = Math.floor(k0 / 100000), cj = k0 % 100000; const loop = [];
+      for (let g = 0; g < 100000; g++) { const lst = edges.get(key(ci, cj)); if (!lst || !lst.length) break; const [ni, nj] = lst.pop(); loop.push(ci, cj); ci = ni; cj = nj; if (key(ci, cj) === k0) break; }
+      if (loop.length >= 8) loops.push(loop);
+    } }
+    // simplify (Douglas-Peucker on the closed loop) and convert to world coordinates
+    const dp = (pts, tol) => {
+      const n = pts.length / 2; if (n < 4) return pts; const keep = new Uint8Array(n); keep[0] = keep[n - 1] = 1; const st = [[0, n - 1]];
+      while (st.length) { const [a, c] = st.pop(); let md = 0, mi = -1; const ax = pts[a * 2], az = pts[a * 2 + 1], cx = pts[c * 2], cz = pts[c * 2 + 1], L = Math.hypot(cx - ax, cz - az) || 1;
+        for (let i = a + 1; i < c; i++) { const d = Math.abs((cx - ax) * (az - pts[i * 2 + 1]) - (ax - pts[i * 2]) * (cz - az)) / L; if (d > md) { md = d; mi = i; } }
+        if (md > tol) { keep[mi] = 1; st.push([a, mi], [mi, c]); } }
+      const out = []; for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i * 2], pts[i * 2 + 1]); return out;
+    };
+    const rings = loops.map((lp) => {
+      const w = []; for (let k = 0; k < lp.length; k += 2) w.push(ox + lp[k] * C, oz + lp[k + 1] * C);
+      // split at the farthest point so DP keeps the shape, then join
+      const n = w.length / 2; let far = 0, fd = 0; for (let i = 1; i < n; i++) { const d = Math.hypot(w[i * 2] - w[0], w[i * 2 + 1] - w[1]); if (d > fd) { fd = d; far = i; } }
+      const a = dp(w.slice(0, far * 2 + 2), 0.3), c = dp([...w.slice(far * 2), w[0], w[1]], 0.3);
+      return [...a.slice(0, -2), ...c.slice(0, -2)];
+    }).filter((r) => r.length >= 6 && Math.abs(G.polyArea(r)) > 1);
+    const sign = Math.sign(G.polyArea(rings.reduce((m, r) => (Math.abs(G.polyArea(r)) > Math.abs(G.polyArea(m)) ? r : m), rings[0] || [0, 0, 1, 0, 0, 1])));
+    const outers = rings.filter((r) => Math.sign(G.polyArea(r)) === sign), holes = rings.filter((r) => Math.sign(G.polyArea(r)) !== sign);
+    for (const o of outers) G._greenFill.push({ ...b, hp: false, p: o, hl: holes.filter((h) => G.pip(h[0], h[1], o)), _src: b, _fill: true });
+    // solid where drawn
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) if (M[j * nx + i]) grid.set(ox + (i + 0.5) * C, oz + (j + 0.5) * C, G.BUILDING);
   }
 
   // ---------------- trees ----------------
@@ -479,7 +551,8 @@ G.buildWorld = async (status) => {
     for (const k of rm.keep) { const q = clipRegion(b.p, [k]); if (q.length >= 6 && Math.abs(G.polyArea(q)) > 1) out.push(cutPiece({ ...b, _src: b }, q, [k], { hl: (b.hl || []).map((h) => clipRegion(h, [k])).filter((h) => h.length >= 6) })); }
     return out;
   };
-  for (const b0 of [...D.buildings.filter((b) => !b.hp), ...outlines, ...D.parts]) for (const b of removeSections(b0)) for (const pc of splitByPassages(b)) allB.push(pc);
+  for (const g of G._greenFill) { const ol = outlines.find((o) => o.n === g.n); if (ol) { g._col = ol._col; g.m = ol.m; g.h = ol.h; } }
+  for (const b0 of [...D.buildings.filter((b) => !b.hp), ...outlines, ...D.parts, ...G._greenFill]) for (const b of b0._fill ? [b0] : removeSections(b0)) for (const pc of splitByPassages(b)) allB.push(pc);
   // collision must match what's drawn: for buildings that were cut up (passages / removed sections) or redrawn
   // from an outline, any solid cell not within ~0.3 m of a drawn piece becomes walkable (no invisible slivers)
   {
@@ -592,6 +665,7 @@ G.buildWorld = async (status) => {
   const HB = new GeoBuilder();
   const hedgeC = hex('#4f8a38'), wallC = hex('#8f897e'), fenceC = hex('#7a6a58'), railC = hex('#555a5e');
   for (const l of D.lines) {
+    if (G._ramp && l === G._ramp.line) continue;
     const spec = l.k === 'hedge' ? [0.9, 1.5, hedgeC] : l.k === 'wall' ? [0.4, 1.1, wallC] : l.k === 'fence' ? [0.14, 1.25, fenceC] : null;
     if (!spec) continue;
     const p = l.p;
@@ -617,6 +691,23 @@ G.buildWorld = async (status) => {
       }
     }
   }
+  if (G._ramp) {
+    const R = G._ramp, top = hex('#b9b2a5'), side = hex('#8f897e');
+    for (const g of R.segs) {
+      const n = Math.max(1, Math.ceil(g.l)), ux = (g.bx - g.ax) / g.l, uz = (g.bz - g.az) / g.l, vx = -uz * R.width / 2, vz = ux * R.width / 2;
+      for (let q = 0; q < n; q++) {
+        const sa = g.s0 + g.l * q / n, sb = g.s0 + g.l * (q + 1) / n, xa = g.ax + (g.bx - g.ax) * q / n, za = g.az + (g.bz - g.az) * q / n, xb = g.ax + (g.bx - g.ax) * (q + 1) / n, zb = g.az + (g.bz - g.az) * (q + 1) / n;
+        const ya = R.y0 + (R.y1 - R.y0) * sa / R.L, yb = R.y0 + (R.y1 - R.y0) * sb / R.L;
+        const gL = Math.min(T.base(xa + vx, za + vz), T.base(xb + vx, zb + vz)) - 0.3, gR = Math.min(T.base(xa - vx, za - vz), T.base(xb - vx, zb - vz)) - 0.3;
+        const P = (x, y, z) => [x, y, z];
+        HB.quad(P(xa + vx, ya, za + vz), P(xb + vx, yb, zb + vz), P(xb - vx, yb, zb - vz), P(xa - vx, ya, za - vz), [0, 1, 0], top);
+        HB.quad(P(xa + vx, gL, za + vz), P(xb + vx, gL, zb + vz), P(xb + vx, yb, zb + vz), P(xa + vx, ya, za + vz), null, side);
+        HB.quad(P(xb - vx, gR, zb - vz), P(xa - vx, gR, za - vz), P(xa - vx, ya, za - vz), P(xb - vx, yb, zb - vz), null, side);
+      }
+    }
+    const e = R.segs[R.segs.length - 1], ux = (e.bx - e.ax) / e.l, uz = (e.bz - e.az) / e.l, vx = -uz * R.width / 2, vz = ux * R.width / 2, gy = T.base(e.bx, e.bz) - 0.3;
+    HB.quad([e.bx - vx, gy, e.bz - vz], [e.bx + vx, gy, e.bz + vz], [e.bx + vx, R.y1, e.bz + vz], [e.bx - vx, R.y1, e.bz - vz], null, side);
+  }
   for (let k = 0; k + 1 < boundary.length; k++) {
     const [ax, az] = boundary[k], [bx, bz] = boundary[k + 1], L = Math.hypot(bx - ax, bz - az), n = Math.ceil(L / 3);
     for (let q2 = 0; q2 < n; q2++) {
@@ -626,7 +717,7 @@ G.buildWorld = async (status) => {
     }
   }
   for (const l of D.lines) if (l.k === 'rail') { const p = l.p; for (let k = 0; k + 3 < p.length; k += 2) { const L = Math.hypot(p[k + 2] - p[k], p[k + 3] - p[k + 1]), n = Math.max(1, Math.ceil(L / 4)); for (let q2 = 0; q2 < n; q2++) { const xa = p[k] + (p[k + 2] - p[k]) * q2 / n, za = p[k + 1] + (p[k + 3] - p[k + 1]) * q2 / n, xb = p[k] + (p[k + 2] - p[k]) * (q2 + 1) / n, zb = p[k + 1] + (p[k + 3] - p[k + 1]) * (q2 + 1) / n; const gy = (T.base(xa, za) + T.base(xb, zb)) / 2; HB.box(xa, za, xb, zb, 0.1, gy + 0.05, gy + 0.25, railC); } } }
-  { const m = HB.mesh(new THREE.MeshLambertMaterial({ vertexColors: true })); m.castShadow = true; m.receiveShadow = true; scene.add(m); }
+  { const m = HB.mesh(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })); m.castShadow = true; m.receiveShadow = true; scene.add(m); }
 
   // ---------------- trees mesh ----------------
   const trunkGeo = new THREE.CylinderGeometry(0.13, 0.2, 3, 5); trunkGeo.translate(0, 1.5, 0);

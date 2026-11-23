@@ -160,15 +160,33 @@ const stairAt = (l) => {
   }
   return null;
 };
+// ramps: a strip along a polyline whose surface rises at a constant gradient from y0 (first point) to y1 (last point)
+T.ramps = [];
+T.addRamp = (pts, width, y0, y1) => {
+  const segs = []; let L = 0;
+  for (let k = 0; k + 3 < pts.length; k += 2) { const l = Math.hypot(pts[k + 2] - pts[k], pts[k + 3] - pts[k + 1]); segs.push({ ax: pts[k], az: pts[k + 1], bx: pts[k + 2], bz: pts[k + 3], s0: L, l }); L += l; }
+  const bb = G.bbox(pts); const r = { pts, segs, L, width, y0, y1, bb: [bb[0] - width, bb[1] - width, bb[2] + width, bb[3] + width] };
+  T.ramps.push(r); return r;
+};
+const rampAt = (x, z) => {
+  for (const r of T.ramps) {
+    if (x < r.bb[0] || x > r.bb[2] || z < r.bb[1] || z > r.bb[3]) continue;
+    let best = Infinity, sBest = 0;
+    for (const g of r.segs) { const dx = g.bx - g.ax, dz = g.bz - g.az, L2 = dx * dx + dz * dz || 1, t = G.clamp(((x - g.ax) * dx + (z - g.az) * dz) / L2, 0, 1), d = Math.hypot(x - g.ax - dx * t, z - g.az - dz * t); if (d < best) { best = d; sBest = g.s0 + t * g.l; } }
+    if (best <= r.width / 2) return r.y0 + (r.y1 - r.y0) * sBest / r.L;
+  }
+  return null;
+};
+T.rampAt = rampAt;
 // terrain used by physics (corridor carved exactly to its walls)
 T.phys = (x, z) => {
   const l = T.locate(x, z);
   if (l) {
     const sh = stairAt(l); if (sh !== null) return sh;
     if (U.act[l.i] && Math.abs(l.t) <= U.hw[l.i]) return floorAt(l.s);
-    return fillAt(l, T.base(x, z));
+    const fb = fillAt(l, T.base(x, z)), rp = rampAt(x, z); return rp !== null ? Math.max(fb, rp) : fb;
   }
-  return T.base(x, z);
+  const b = T.base(x, z), rp = rampAt(x, z); return rp !== null ? Math.max(b, rp) : b;
 };
 // terrain used for the mesh (carved a bit wider; the strip is hidden by walls / copings / the deck)
 T.mesh = (x, z) => {
