@@ -52,7 +52,7 @@ const move = (e) => {
       const l = looks.get(t.identifier);
       const dx = t.clientX - l.x, dy = t.clientY - l.y; l.x = t.clientX; l.y = t.clientY;
       const s = lookSens * (aimOn ? 0.55 : 1);
-      G.cam.yaw -= dx * s; G.cam.pitch = G.clamp(G.cam.pitch + dy * s, -0.55, 1.2); G.cam.mouseT = 1.4;
+      G.cam.yaw -= dx * s; G.cam.pitch = G.clamp(G.cam.pitch + dy * s, -1.0, 1.35); G.cam.mouseT = 1.4; G.cam.recenter = null;
     }
   }
   e.preventDefault();

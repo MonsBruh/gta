@@ -28,7 +28,11 @@ G.camDist = (p) => Math.hypot(camera.position.x - p.x, camera.position.z - p.z);
 G.shake = (a) => { G.cam.shake = Math.min(1.2, Math.max(G.cam.shake, a)); };
 
 // ---------------- input ----------------
-const lockPointer = () => { if (!G.mobile && canvas.requestPointerLock) canvas.requestPointerLock(); };
+const lockPointer = () => {
+  if (G.mobile || !canvas.requestPointerLock) return;
+  try { const pr = canvas.requestPointerLock({ unadjustedMovement: true }); if (pr && pr.catch) pr.catch(() => { try { canvas.requestPointerLock(); } catch (e) { /* ignore */ } }); }
+  catch (e) { try { canvas.requestPointerLock(); } catch (e2) { /* ignore */ } }
+};
 const keys = {};
 G.input = { fwd: 0, right: 0, sprint: false, jump: false, aim: false, fire: false, car: { throttle: 0, steer: 0, handbrake: false } };
 let mouseL = false, mouseR = false, firePressed = false;
@@ -41,6 +45,7 @@ addEventListener('keydown', (e) => {
   const pl = G.player;
   if (e.code === 'KeyF' || e.code === 'Enter') enterExit();
   if (e.code === 'KeyR') G.reload(pl);
+  if (e.code === 'KeyC') G.cam.recenter = pl.vehicle ? pl.vehicle.yaw : pl.yaw;
   if (e.code === 'KeyH' && pl.vehicle) { G.audio.horn(); G.panic(pl.pos.x, pl.pos.z, 15, 0.3); }
   if (e.code === 'KeyN') { G.muted = !G.muted; G.audio.setMuted(G.muted); G.hud.notify(G.muted ? 'Sound off' : 'Sound on'); }
   const d = e.code.match(/^Digit([1-5])$/); if (d) selectWeapon(G.WEAPON_ORDER[+d[1] - 1]);
@@ -57,7 +62,9 @@ addEventListener('contextmenu', (e) => e.preventDefault());
 addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas || G.state.paused) return;
   const s = 0.0024 * (G.player && G.player.aiming ? 0.6 : 1);
-  G.cam.yaw -= e.movementX * s; G.cam.pitch = G.clamp(G.cam.pitch + e.movementY * s, -0.55, 1.2); G.cam.mouseT = 1.4;
+  // browsers occasionally report one huge bogus jump in pointer-lock mode: ignore it rather than flick the view
+  if (Math.abs(e.movementX) > 350 || Math.abs(e.movementY) > 350) return;
+  G.cam.yaw -= e.movementX * s; G.cam.pitch = G.clamp(G.cam.pitch + e.movementY * s, -1.0, 1.35); G.cam.mouseT = 1.4; G.cam.recenter = null;
 });
 addEventListener('wheel', (e) => { if (G.state.started && !G.state.paused) cycleWeapon(e.deltaY > 0 ? 1 : -1); });
 document.addEventListener('pointerlockchange', () => {
@@ -81,7 +88,7 @@ function cycleWeapon(dir) {
 }
 function enterExit() {
   const pl = G.player; if (pl.dead) return;
-  if (pl.vehicle) { const v = pl.vehicle; G.exitVehicle(pl, Math.abs(v.speed) > 7); G.cam.yaw = v.yaw; return; }
+  if (pl.vehicle) { const v = pl.vehicle; G.exitVehicle(pl, Math.abs(v.speed) > 7); return; }
   let best = null, bd = 3.2;
   for (const v of G.vehicles) {
     if (v.removed || v.dead || v.sinkT > 0 || Math.abs(v.pos.y - pl.pos.y) > 1.8) continue;
@@ -173,7 +180,6 @@ function updateCamera(dt) {
   cm.mouseT -= dt;
   if (pl.vehicle) {
     const v = pl.vehicle;
-    if (cm.mouseT <= 0 && Math.abs(v.speed) > 2) { const want = v.speed >= 0 ? v.yaw : v.yaw; cm.yaw += G.angDiff(cm.yaw, want) * Math.min(1, dt * 2.5); cm.pitch = G.lerp(cm.pitch, 0.2, dt * 2); }
     dist = 5.5 + v.L * 0.6 + Math.min(4, Math.abs(v.speed) * 0.06); h = v.spec.H + 0.6;
     target = new V3(v.pos.x, v.pos.y + h, v.pos.z);
   } else {
@@ -183,12 +189,16 @@ function updateCamera(dt) {
   }
   const f = new V3(Math.sin(cm.yaw) * Math.cos(cm.pitch), -Math.sin(cm.pitch), Math.cos(cm.yaw) * Math.cos(cm.pitch));
   const right = new V3(-Math.cos(cm.yaw), 0, Math.sin(cm.yaw));
+  if (cm.recenter != null) { const d = G.angDiff(cm.yaw, cm.recenter); cm.yaw += d * Math.min(1, dt * 10); if (Math.abs(d) < 0.01) cm.recenter = null; }
   cm.curDist = G.lerp(cm.curDist, dist, Math.min(1, dt * 6));
   let want = target.clone().addScaledVector(f, -cm.curDist).addScaledVector(right, shoulder);
   // collide with buildings
   // keep the camera out of walls, ceilings, buildings and hills: slide it in toward the player instead
   // (it keeps ~0.4 m of clearance all round so the near plane never cuts through a surface)
-  want = G.camSafe(target, want);
+  const safe = G.camSafe(target, want), allowed = safe.distanceTo(target), full = want.distanceTo(target);
+  if (cm.act === undefined || dt === 0) cm.act = allowed;
+  cm.act = allowed < cm.act ? allowed : cm.act + (allowed - cm.act) * Math.min(1, dt * 3.5);
+  if (full > 1e-4) want = target.clone().addScaledVector(want.clone().sub(target).divideScalar(full), cm.act);
   camera.position.copy(want);
   if (cm.shake > 0) {
     const sh = new V3(G.rand(-1, 1), G.rand(-1, 1), G.rand(-1, 1)).multiplyScalar(cm.shake * 0.15);

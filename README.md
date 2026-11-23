@@ -29,6 +29,7 @@ The map isn't hand-drawn. It's generated from **OpenStreetMap** data for the cam
 | 1–5, Q/E, mouse wheel | Fists, pistol, SMG, shotgun, rocket launcher |
 | H | Horn |
 | M | Full campus map (click it to set a waypoint) |
+| C | Swing the camera back behind you |
 | N | Mute |
 | Esc | Pause |
 
