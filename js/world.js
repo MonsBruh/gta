@@ -102,6 +102,20 @@ G.buildWorld = async (status) => {
   const isUnder = (r) => { if (!(r.ly && +r.ly < 0) && !(r.lv && /^-1/.test(r.lv))) return false; const n = r.p.length / 2, k = Math.floor(n / 2) * 2; return T.deck(r.p[k], r.p[k + 1], 1) !== null; };
   G.isUnder = isUnder;
   const surfY = (x, z) => G.groundAt(x, z);
+  // paths mapped as running *through* a building at ground level (tunnel=building_passage, covered ways):
+  // each segment becomes a rectangular corridor that is opened up in the building and kept clear for walking
+  const PASS_KINDS = new Set(['footway', 'pedestrian', 'path', 'steps', 'cycleway', 'service', 'living_street']);
+  const passages = [];
+  for (const r of D.roads) {
+    if (!PASS_KINDS.has(r.t) || isUnder(r)) continue;
+    if (!(r.tn === 'building_passage' || r.tn === 'yes' || r.tn === 'covered')) continue;
+    const W = Math.max(2.8, (r.t === 'service' ? r.w : 2.2) + 0.6);
+    for (let k = 0; k + 3 < r.p.length; k += 2) {
+      const ax = r.p[k], az = r.p[k + 1], bx = r.p[k + 2], bz = r.p[k + 3], L = Math.hypot(bx - ax, bz - az); if (L < 0.3) continue;
+      passages.push({ ax, az, ux: (bx - ax) / L, uz: (bz - az) / L, L, W, e: 1.5 });
+    }
+  }
+  G._passages = passages;
 
   // ---------------- collision grid ----------------
   status('Rasterising collision…'); await tick();
@@ -155,9 +169,18 @@ G.buildWorld = async (status) => {
     if (isUnder(r)) continue;
     if (VEH_ROADS.has(r.t)) grid.stroke(r.p, Math.max(2.5, r.w - 0.8), G.FREE);
     else if (r.tu) grid.stroke(r.p, Math.max(2.2, r.w), G.FREE);
+    else if (r.tn === 'building_passage') grid.stroke(r.p, 2.6, G.FREE);
     else grid.stroke(r.p, Math.max(1.4, r.w * 0.8), G.FREE, (v) => v === G.BARRIER || v === G.WATER || v === G.TREE);
   }
 
+  // clear the whole width of every building passage (matches the opening cut in the building below)
+  for (const ps of passages) {
+    const vx = -ps.uz, vz = ps.ux;
+    for (let a = -ps.e; a <= ps.L + ps.e; a += 0.25) for (let t = -ps.W / 2 + 0.15; t <= ps.W / 2 - 0.15; t += 0.25) {
+      const x = ps.ax + ps.ux * a + vx * t, z = ps.az + ps.uz * a + vz * t, v = grid.get(x, z);
+      if (v === G.BUILDING || v === G.BARRIER || v === G.TREE) grid.set(x, z, G.FREE);
+    }
+  }
   // Underpass: open cuttings are clear inside, with railings along the top; stairwells get railings too
   if (U.ok) {
     for (let i = 0; i < U.N; i++) {
@@ -393,7 +416,49 @@ G.buildWorld = async (status) => {
   };
   const partOf = (b) => D.parts.find((pt) => { const c = G.centroid(pt.p); return G.pip(c.x, c.z, b.p); });
   const outlines = D.buildings.filter((b) => b.hp).map((b) => { const pt = partOf(b); return { ...b, p: insetRing(b.p, 0.12), hl: b.hl && b.hl.map((h) => insetRing(h, -0.12)), h: b.h - 0.08, m: b.m || (pt && pt.m), _col: pt }; });
-  const allB = [...D.buildings.filter((b) => !b.hp), ...outlines, ...D.parts];
+  const clipHalf = (p, nx, nz, d) => { // keep nx*x+nz*z <= d
+    const out = [], n = p.length / 2;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n, ax = p[i * 2], az = p[i * 2 + 1], bx = p[j * 2], bz = p[j * 2 + 1];
+      const da = nx * ax + nz * az - d, db = nx * bx + nz * bz - d;
+      if (da <= 0) out.push(ax, az);
+      if ((da < 0 && db > 0) || (da > 0 && db < 0)) { const k = da / (da - db); out.push(ax + (bx - ax) * k, az + (bz - az) * k); }
+    }
+    return out;
+  };
+  const clipRegion = (p, planes) => { let q = p; for (const pl of planes) { if (q.length < 6) return []; q = clipHalf(q, pl[0], pl[1], pl[2]); } return q.length >= 6 ? q : []; };
+  const regionsFor = (ps) => {
+    const ux = ps.ux, uz = ps.uz, vx = -uz, vz = ux, sA = ux * ps.ax + uz * ps.az, tA = vx * ps.ax + vz * ps.az, h = ps.W / 2;
+    const sLo = [-ux, -uz, -(sA - ps.e)], sHi = [ux, uz, sA + ps.L + ps.e], tLo = [-vx, -vz, -(tA - h)], tHi = [vx, vz, tA + h];
+    return {
+      middle: [sLo, sHi, tLo, tHi],
+      rest: [[[vx, vz, tA - h]], [[-vx, -vz, -(tA + h)]], [[ux, uz, sA - ps.e], tLo, tHi], [[-ux, -uz, -(sA + ps.L + ps.e)], tLo, tHi]],
+    };
+  };
+  const splitByPassages = (b) => {
+    let pieces = [{ ...b, _src: b }];
+    for (const ps of passages) {
+      const bb = G.bbox(b.p), r2 = ps.L + ps.e + ps.W;
+      if (ps.ax < bb[0] - r2 || ps.ax > bb[2] + r2 || ps.az < bb[1] - r2 || ps.az > bb[3] + r2) continue;
+      const R = regionsFor(ps), next = [];
+      let touched = false;
+      for (const pc of pieces) {
+        if (pc._bridge) { next.push(pc); continue; }
+        const mid = clipRegion(pc.p, R.middle);
+        if (mid.length < 6 || Math.abs(G.polyArea(mid)) < 0.5) { next.push(pc); continue; }
+        touched = true;
+        const holesIn = (reg) => (pc.hl || []).map((h) => clipRegion(h, reg)).filter((h) => h.length >= 6 && Math.abs(G.polyArea(h)) > 0.3);
+        // the building above the passage becomes a bridge with a ~3 m clear walkway underneath
+        let gmax = -Infinity; for (let k = 0; k < mid.length; k += 2) gmax = Math.max(gmax, G.groundAt(mid[k], mid[k + 1]));
+        next.push({ ...pc, p: mid, hl: holesIn(R.middle), _bridge: true, _bottom: gmax + 3.1 });
+        for (const reg of R.rest) { const q = clipRegion(pc.p, reg); if (q.length >= 6 && Math.abs(G.polyArea(q)) > 0.5) next.push({ ...pc, p: q, hl: holesIn(reg) }); }
+      }
+      if (touched) pieces = next;
+    }
+    return pieces;
+  };
+  const allB = [];
+  for (const b of [...D.buildings.filter((b) => !b.hp), ...outlines, ...D.parts]) for (const pc of splitByPassages(b)) allB.push(pc);
   G._rendered = allB;
   for (const b of allB) {
     const r = G.mulberry(G.hash(b.p.join(',').slice(0, 40)));
@@ -406,9 +471,13 @@ G.buildWorld = async (status) => {
       const ax = ring[k * 2], az = ring[k * 2 + 1], bx = ring[((k + 1) % n) * 2], bz = ring[((k + 1) % n) * 2 + 1], L = Math.hypot(bx - ax, bz - az), m = Math.max(1, Math.ceil(L));
       for (let q2 = 0; q2 <= m; q2++) { const d = T.deck(ax + (bx - ax) * q2 / m, az + (bz - az) * q2 / m, 2.7); if (d !== null && d > deckMax) deckMax = d; }
     }
-    let base = b.mh > 0 ? gAvg + b.mh : gMin - 0.8;
-    if (deckMax > -Infinity) base = Math.max(base, deckMax - 0.7);
+    let base = b._bottom !== undefined ? b._bottom : b.mh > 0 ? gAvg + b.mh : gMin - 0.8;
+    if (deckMax > -Infinity && b._bottom === undefined) base = Math.max(base, deckMax - 0.7);
+    const raised = b.mh > 0 || b._bottom !== undefined;
+    // wall feet follow the ground (never below the tunnel ceiling) instead of one flat base
+    const foot = (x, z) => { if (raised) return base; let f = T.surf(x, z) - 0.8; const d = T.deck(x, z, 2.7); if (d !== null) f = Math.max(f, d - 0.7); return f; };
     const wc = wallColour(b._col || b), top = Math.max(base + 0.5, gAvg + Math.max((b.mh || 0) + 0.5, b.h));
+    if (b._bridge && top < base + 0.6) continue;   // low building: the passage is simply open
     G._bldBase = G._bldBase || []; G._bldBase.push({ b, base, top });
     const plain = PLAIN.has(b.t) || (b.h - (b.mh || 0)) < 3;
     const W = plain ? BP : BW;
@@ -421,14 +490,19 @@ G.buildWorld = async (status) => {
         const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz); if (L < 0.05) continue;
         // outward normal: for ccw outer ring (dz,-dx)
         let nxn = outwardFlip ? dz / L : -dz / L, nzn = outwardFlip ? -dx / L : dx / L;
-        const A = [ax, base, az], B = [bx, base, bz], C = [bx, top, bz], Dd = [ax, top, az];
-        const u0 = acc / 5.2, u1 = (acc + L) / 5.2, v0 = (base - gAvg) / 6.6, v1 = (top - gAvg) / 6.6; acc += L;
         const col = jitter(wc, r, 0.03);
-        // triangle (A,B,C) faces (-dz,dx)
-        const faceN = [-dz / L, 0, dx / L];
+        const faceN = [-dz / L, 0, dx / L];                  // triangle (A,B,C) faces (-dz,dx)
         const same = faceN[0] * nxn + faceN[2] * nzn > 0;
-        if (same) W.quad(A, B, C, Dd, [nxn, 0, nzn], col, [[u0, v0], [u1, v0], [u1, v1], [u0, v1]]);
-        else W.quad(B, A, Dd, C, [nxn, 0, nzn], col, [[u1, v0], [u0, v0], [u0, v1], [u1, v1]]);
+        const m = raised ? 1 : Math.max(1, Math.ceil(L / 2));  // short pieces so the bottom hugs the ground
+        for (let q = 0; q < m; q++) {
+          const x0 = ax + dx * q / m, z0 = az + dz * q / m, x1 = ax + dx * (q + 1) / m, z1 = az + dz * (q + 1) / m;
+          const f0 = Math.min(foot(x0, z0), top - 0.5), f1 = Math.min(foot(x1, z1), top - 0.5);
+          const A = [x0, f0, z0], B = [x1, f1, z1], C = [x1, top, z1], Dd = [x0, top, z0];
+          const u0 = (acc + L * q / m) / 5.2, u1 = (acc + L * (q + 1) / m) / 5.2, va = (f0 - gAvg) / 6.6, vb = (f1 - gAvg) / 6.6, v1 = (top - gAvg) / 6.6;
+          if (same) W.quad(A, B, C, Dd, [nxn, 0, nzn], col, [[u0, va], [u1, vb], [u1, v1], [u0, v1]]);
+          else W.quad(B, A, Dd, C, [nxn, 0, nzn], col, [[u1, vb], [u0, va], [u0, v1], [u1, v1]]);
+        }
+        acc += L;
       }
     });
     // roof
@@ -455,11 +529,14 @@ G.buildWorld = async (status) => {
         const ny = (B.y - A.y) * (C.x - A.x) - (B.x - A.x) * (C.y - A.y);
         if (ny < 0) { const tmp = A; A = B; B = tmp; }
         BR.tri([A.x, top, A.y], [B.x, top, B.y], [C.x, top, C.y], [0, 1, 0], rc);
-        if (b.mh > 0) BR.tri([B.x, base, B.y], [A.x, base, A.y], [C.x, base, C.y], [0, -1, 0], rc);
+        if (raised) BR.tri([B.x, base, B.y], [A.x, base, A.y], [C.x, base, C.y], [0, -1, 0], b._bridge ? hex('#8c8a86') : rc);
       }
     }
-    if (b.n || b.t === 'university' || b.t === 'residential') {
-      const c = G.centroid(b.p); G.buildingList.push({ n: b.n, x: c.x, z: c.z, h: top, p: b.p, t: b.t });
+    if ((b.n || b.t === 'university' || b.t === 'residential') && !b._bridge) {
+      // one entry (and one label) per original building, even if a passage split it into pieces
+      const src = b._src || b, prev = G.buildingList.find((e) => e.src === src);
+      if (prev) prev.h = Math.max(prev.h, top);
+      else { const c = G.centroid(src.p); G.buildingList.push({ n: src.n, x: c.x, z: c.z, h: top, p: src.p, t: src.t, src }); }
     }
   }
   for (const [B, mat] of [[BW, winMat], [BP, plainMat], [BR, roofMat]]) {
