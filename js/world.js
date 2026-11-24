@@ -205,6 +205,8 @@ G.buildWorld = async (status) => {
       const x = ox + (i + 0.5) * C, z = oz + (j + 0.5) * C;
       if (rm.keep.some((k) => k[0] * x + k[1] * z <= k[2]) || !G.pip(x, z, b.p)) continue;     // only inside the removed section
       if (grid.get(x, z) !== G.FREE || nearPath(x, z) || onHard(x, z)) continue;               // only plain grass
+      // keep the top of every Underpass stairwell clear: landing plus room either side to walk out onto the square
+      { const l = T.locate(x, z); if (l && T.stairs.some((st) => Math.abs(l.s - st.s) <= st.wid + 2.5 && l.t * st.side >= st.hwc && l.t * st.side <= st.edge)) continue; }
       M[j * nx + i] = 1;
     }
     // drop tiny islands (< 6 m2)
