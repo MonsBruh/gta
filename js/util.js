@@ -123,7 +123,7 @@ G.solidForCam = (v) => v === G.BUILDING;
 G.moveCircle = (pos, dx, dz, r) => {
   const g = G.grid; let hit = false; const y = pos.y || 0;
   // grid solids don't apply inside the Underpass tunnel; walls there come from the height step
-  const solid = (x, z) => !(G.inTunnel && G.inTunnel(x, z, y)) && G.solidForWalk(g.get(x, z));
+  const solid = (x, z) => !(G.inTunnel && G.inTunnel(x, z, y)) && !(G.onRamp && G.onRamp(x, z, y)) && G.solidForWalk(g.get(x, z));
   const step = (x, z) => G.groundAt && G.groundAt(x, z, y + 0.6) > y + 0.75;
   const blocked = (x, z) => {
     if (solid(x, z) || step(x, z)) return true;

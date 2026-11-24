@@ -159,7 +159,17 @@ G.buildWorld = async (status) => {
     for (const [sd, gh] of samples) if (sd > 2) grad = Math.max(grad, (gh + 0.12 - ya) / sd);
     const FIRST_FLOOR = 4.1;   // shop ground floor (3.5 m) + floor slab; the ramp lands here, in front of Spar
     grad = Math.max(grad, (T.base(pts[pts.length - 2], pts[pts.length - 1]) + FIRST_FLOOR - ya) / L);
-    G._ramp = T.addRamp(pts, 1.6, ya, ya + grad * L); G._ramp.line = rampLine;
+    const R = G.setupRamp(pts, ya, ya + grad * L); R.line = rampLine; G._ramp = R;
+    // the top end widens outward to meet Slaidburn House (Spar's first-floor door)
+    const e = R.at(R.L - 0.3); let outEnd = 0.9;
+    for (let t = 0.9; t < 5; t += 0.1) { if (grid.get(e.x - e.nx * t, e.z - e.nz * t) === G.BUILDING) { outEnd = t - 0.05; break; } }
+    R.outEnd = outEnd;
+    G.placeRampShops([
+      { n: "Wong's Oriental Market", sign: "WONG'S", bg: '#c4122f', fg: '#ffffff' },
+      { n: 'Wok Inn', sign: 'WOK INN', bg: '#b3121f', fg: '#ffe9a8' },
+      { n: 'Sultan of Lancaster Experience', sign: 'SULTAN', bg: '#1d4f3a', fg: '#f3d27a' },
+      { n: "KC's African & Caribbean Cuisine", sign: "KC'S", bg: '#f2f2f2', fg: '#c4122f' },
+    ]);
   }
   for (const l of D.lines) {
     if (G._ramp && l === G._ramp.line) continue;  // walkable ramp, not a wall
@@ -229,11 +239,7 @@ G.buildWorld = async (status) => {
   G._shopUnits = [];
   {
     const SHOPS = [
-      { n: "Wong's Oriental Market", sign: "WONG'S", bg: '#c4122f', fg: '#ffffff' },
-      { n: 'Wok Inn', sign: 'WOK INN', bg: '#b3121f', fg: '#ffe9a8' },
-      { n: 'Sultan of Lancaster Experience', sign: 'SULTAN', bg: '#1d4f3a', fg: '#f3d27a' },
       { n: 'Friends Bistro', sign: 'Friends', bg: '#2a2a2e', fg: '#ffffff' },
-      { n: "KC's African & Caribbean Cuisine", sign: "KC'S", bg: '#f2f2f2', fg: '#c4122f' },
     ];
     const polys = [...D.buildings.filter((b) => !(b.t === 'roof' || b.mh > 0)), ...D.parts.filter((b) => !(b.mh > 0)), ...G._greenFill];
     const REM = REMOVE[0];
@@ -277,14 +283,12 @@ G.buildWorld = async (status) => {
       passages.push({ ax: best.px, az: best.pz, ux: -best.nx, uz: -best.nz, L: unit.depth, W, e: 0.4, shop: true, clearAbs: g + unit.clear });
     }
     // Spar moves up to the first floor, directly above KC's, where the ramp lands
-    const kc = G._shopUnits.find((u) => u.n.startsWith("KC's")), spar = D.pois.find((q) => q.n === 'Spar');
-    if (kc && spar && G._ramp) {
-      kc.upper = { sign: 'SPAR', bg: '#ffffff', fg: '#e0001b', y: Math.max(G._ramp.y1, kc.g + kc.clear) };
-      const R = G._ramp; let bestS = 0, bd = Infinity;
-      for (const sg of R.segs) for (let q = 0; q <= 10; q++) { const x = sg.ax + (sg.bx - sg.ax) * q / 10, z = sg.az + (sg.bz - sg.az) * q / 10, d = Math.hypot(x - kc.px, z - kc.pz); if (d < bd) { bd = d; bestS = sg.s0 + sg.l * q / 10; } }
-      const sOn = Math.min(R.L - 0.8, bestS); let mx = 0, mz = 0;
-      for (const sg of R.segs) if (sOn >= sg.s0 && sOn <= sg.s0 + sg.l) { const k = (sOn - sg.s0) / sg.l; mx = sg.ax + (sg.bx - sg.ax) * k; mz = sg.az + (sg.bz - sg.az) * k; }
-      spar.x = mx; spar.z = mz; spar.y = R.y0 + (R.y1 - R.y0) * sOn / R.L; spar.upper = true;
+    // Spar: first-floor shop on Slaidburn House where the ramp lands (right above KC's under the ramp's top)
+    const spar = D.pois.find((q) => q.n === 'Spar'), R = G._ramp;
+    if (spar && R) {
+      const sE = R.L - 2.6, e = R.at(sE), ow = R.outW(sE);
+      G._shopUnits.push({ n: 'Spar', upperOnly: true, px: e.x - e.nx * (ow + 0.06), pz: e.z - e.nz * (ow + 0.06), ux: e.ux, uz: e.uz, nx: e.nx, nz: e.nz, W: 4.6, g: R.y(sE), clear: 0, upper: { sign: 'SPAR', bg: '#ffffff', fg: '#e0001b', y: R.y(sE) } });
+      spar.x = e.x - e.nx * (ow - 0.9); spar.z = e.z - e.nz * (ow - 0.9); spar.y = R.y(sE); spar.upper = true;
     }
   }
 
@@ -300,7 +304,7 @@ G.buildWorld = async (status) => {
       for (let s = 0; s < n; s++) addTree(p[k] + (p[k + 2] - p[k]) * s / n, p[k + 1] + (p[k + 3] - p[k + 1]) * s / n, G.rand(0.9, 1.3));
     }
   }
-  const okTree = (x, z) => grid.get(x, z) === G.FREE && roadGrid.get(x, z) === 0;
+  const okTree = (x, z) => grid.get(x, z) === G.FREE && roadGrid.get(x, z) === 0 && !(G.RAMP.ok && G.RAMP.deckAt(x, z) !== null);
   for (const a of D.areas) {
     const spacing = a.k === 'wood' ? (G.mobile ? 12 : 8) : (a.k === 'park' || a.k === 'grass') ? 22 : a.k === 'scrub' ? 12 : 0;
     if (!spacing) continue;
@@ -433,7 +437,9 @@ G.buildWorld = async (status) => {
   const maxAniso = G.renderer.capabilities.getMaxAnisotropy();
   const CELL = G.mobile ? 8 : 4;
   // fine 1 m patch around the Underpass so the cutting, walls and stairs are crisp
-  const PB = U.ok ? [Math.floor((U.bb[0] + HW) / CELL) * CELL - HW, Math.floor((U.bb[1] + HH) / CELL) * CELL - HH, Math.ceil((U.bb[2] + HW) / CELL) * CELL - HW, Math.ceil((U.bb[3] + HH) / CELL) * CELL - HH] : null;
+  const pbb = U.ok ? U.bb.slice() : null;
+  if (pbb && G.RAMP.ok) { pbb[0] = Math.min(pbb[0], G.RAMP.bb[0]); pbb[1] = Math.min(pbb[1], G.RAMP.bb[1]); pbb[2] = Math.max(pbb[2], G.RAMP.bb[2]); pbb[3] = Math.max(pbb[3], G.RAMP.bb[3]); }
+  const PB = pbb ? [Math.floor((pbb[0] + HW) / CELL) * CELL - HW, Math.floor((pbb[1] + HH) / CELL) * CELL - HH, Math.ceil((pbb[2] + HW) / CELL) * CELL - HW, Math.ceil((pbb[3] + HH) / CELL) * CELL - HH] : null;
   const inPatch = (x0, z0, x1, z1) => PB && x0 >= PB[0] - 1e-6 && z0 >= PB[1] - 1e-6 && x1 <= PB[2] + 1e-6 && z1 <= PB[3] + 1e-6;
   const edgeH = (x, z) => { // heights on the patch border match the coarse mesh (no cracks)
     const onX = Math.abs(x - PB[0]) < 1e-6 || Math.abs(x - PB[2]) < 1e-6, onZ = Math.abs(z - PB[1]) < 1e-6 || Math.abs(z - PB[3]) < 1e-6;
@@ -767,35 +773,7 @@ G.buildWorld = async (status) => {
       }
     }
   }
-  if (G._ramp) {
-    const R = G._ramp, top = hex('#b9b2a5'), side = hex('#8f897e');
-    for (const g of R.segs) {
-      const n = Math.max(1, Math.ceil(g.l)), ux = (g.bx - g.ax) / g.l, uz = (g.bz - g.az) / g.l, vx = -uz * R.width / 2, vz = ux * R.width / 2;
-      for (let q = 0; q < n; q++) {
-        const sa = g.s0 + g.l * q / n, sb = g.s0 + g.l * (q + 1) / n, xa = g.ax + (g.bx - g.ax) * q / n, za = g.az + (g.bz - g.az) * q / n, xb = g.ax + (g.bx - g.ax) * (q + 1) / n, zb = g.az + (g.bz - g.az) * (q + 1) / n;
-        const ya = R.y0 + (R.y1 - R.y0) * sa / R.L, yb = R.y0 + (R.y1 - R.y0) * sb / R.L;
-        const gL = Math.min(T.base(xa + vx, za + vz), T.base(xb + vx, zb + vz)) - 0.3, gR = Math.min(T.base(xa - vx, za - vz), T.base(xb - vx, zb - vz)) - 0.3;
-        const P = (x, y, z) => [x, y, z];
-        HB.quad(P(xa + vx, ya, za + vz), P(xb + vx, yb, zb + vz), P(xb - vx, yb, zb - vz), P(xa - vx, ya, za - vz), [0, 1, 0], top);
-        const gm = T.base((xa + xb) / 2, (za + zb) / 2), high = Math.min(ya, yb) - gm >= T.RAMP_HEADROOM;
-        const bl = high ? ya - T.RAMP_SLAB : gL, br = high ? yb - T.RAMP_SLAB : gR;
-        HB.quad(P(xa + vx, high ? bl : gL, za + vz), P(xb + vx, high ? br : gL, zb + vz), P(xb + vx, yb, zb + vz), P(xa + vx, ya, za + vz), null, side);
-        HB.quad(P(xb - vx, high ? br : gR, zb - vz), P(xa - vx, high ? bl : gR, za - vz), P(xa - vx, ya, za - vz), P(xb - vx, yb, zb - vz), null, side);
-        if (high) {
-          HB.quad(P(xa - vx, bl, za - vz), P(xb - vx, br, zb - vz), P(xb + vx, br, zb + vz), P(xa + vx, bl, za + vz), [0, -1, 0], side);   // underside
-          if (Math.floor(sb / 4) !== Math.floor(sa / 4)) for (const sd of [-0.6, 0.6]) {                                             // columns every 4 m
-            const cx = xb + (-uz) * sd, cz = zb + ux * sd; HB.box(cx - ux * 0.15, cz - uz * 0.15, cx + ux * 0.15, cz + uz * 0.15, 0.3, T.base(cx, cz) - 0.2, br, side);
-            grid.disc(cx, cz, 0.2, G.TREE, (v) => v === G.FREE);
-          }
-          // railings on top where it's high
-          HB.box(xa + vx * 0.95, za + vz * 0.95, xb + vx * 0.95, zb + vz * 0.95, 0.06, ya, ya + 1.05, side);
-          HB.box(xa - vx * 0.95, za - vz * 0.95, xb - vx * 0.95, zb - vz * 0.95, 0.06, ya, ya + 1.05, side);
-        }
-      }
-    }
-    const e = R.segs[R.segs.length - 1], ux = (e.bx - e.ax) / e.l, uz = (e.bz - e.az) / e.l, vx = -uz * R.width / 2, vz = ux * R.width / 2, gy = T.base(e.bx, e.bz) - 0.3;
-    HB.quad([e.bx - vx, gy, e.bz - vz], [e.bx + vx, gy, e.bz + vz], [e.bx + vx, R.y1, e.bz + vz], [e.bx - vx, R.y1, e.bz - vz], null, side);
-  }
+  if (G.RAMP.ok) { G.rampGrid(grid); G.buildRamp(); }
   for (let k = 0; k + 1 < boundary.length; k++) {
     const [ax, az] = boundary[k], [bx, bz] = boundary[k + 1], L = Math.hypot(bx - ax, bz - az), n = Math.ceil(L / 3);
     for (let q2 = 0; q2 < n; q2++) {

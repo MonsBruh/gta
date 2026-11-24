@@ -34,7 +34,7 @@ class Vehicle {
   blockedAt(x, z, yaw) {
     const y = this.pos.y;
     for (const [px, pz] of this.samples(x, z, yaw)) {
-      if (!G.inTunnel(px, pz, y)) { const v = G.grid.get(px, pz); if (v === G.BUILDING || v === G.BARRIER || v === G.TREE) return true; }
+      if (!G.inTunnel(px, pz, y) && !G.onRamp(px, pz, y)) { const v = G.grid.get(px, pz); if (v === G.BUILDING || v === G.BARRIER || v === G.TREE) return true; }
       if (G.groundAt(px, pz, y + 0.8) > y + 1.1) return true;  // retaining walls, steep banks
     }
     return false;

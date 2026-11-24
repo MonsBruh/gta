@@ -19,6 +19,7 @@ G.buildShopfronts = (units) => {
     const { px, pz, ux, uz, nx, nz, W, g, clear, depth } = u, gOut = u.gOut !== undefined ? u.gOut : g;
     const at = (a, t, y) => [px + ux * a + nx * t, y, pz + uz * a + nz * t];   // a: along the wall, t: outward
     const h = W / 2;
+    if (!u.upperOnly) {
     // glass front set back slightly, with mullions
     glassGeo.quad(at(-h + 0.25, -0.15, g + 0.05), at(h - 0.25, -0.15, g + 0.05), at(h - 0.25, -0.15, g + clear - 0.75), at(-h + 0.25, -0.15, g + clear - 0.75), null, [1, 1, 1]);
     for (let a = -h + 0.25; a <= h - 0.2; a += (W - 0.5) / 3) { const p0 = at(a, -0.15, 0), p1 = at(a + 0.01, -0.15, 0); B.box(p0[0], p0[2], p1[0] + ux * 0.08, p1[2] + uz * 0.08, 0.12, g, g + clear - 0.75, frame); }
@@ -42,6 +43,7 @@ G.buildShopfronts = (units) => {
     }
     const lp = new THREE.Mesh(new THREE.PlaneGeometry(W * 0.55, 0.5), lightMat); const lc = at(0, -depth / 2, g + clear - 0.08);
     lp.position.set(lc[0], lc[1], lc[2]); lp.rotation.x = Math.PI / 2; lp.rotation.z = -Math.atan2(nx, nz); G.scene.add(lp);
+    }
     // upstairs shop (Spar above KC's): window band + sign on the first floor facade, at the level the ramp lands
     if (u.upper) {
       const y = u.upper.y;
