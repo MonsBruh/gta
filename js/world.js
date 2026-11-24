@@ -174,10 +174,23 @@ G.buildWorld = async (status) => {
     // slopes down at one constant gradient to the passage entrance: no wall or gap where they meet
     const pth = D.roads.find((r) => r.t === 'footway' && r.p.length === 6 && Math.hypot(r.p[0] + 25, r.p[1] + 190) < 1.5 && Math.hypot(r.p[4] + 18, r.p[5] + 200) < 1.5);
     if (pth) {
-      let sJ = 0, bd = Infinity; for (let s2 = 0; s2 <= R.L; s2 += 0.25) { const a = R.at(s2), o = R.outW(s2), d = Math.hypot(a.x - a.nx * o - pth.p[0], a.z - a.nz * o - pth.p[1]); if (d < bd) { bd = d; sJ = s2; } }
-      const a = R.at(sJ), o = R.outW(sJ), sx = a.x - a.nx * (o - 1.4), sz = a.z - a.nz * (o - 1.4);   // starts inside the deck so they overlap
-      const endX = pth.p[4], endZ = pth.p[5], yEnd = T.base(endX, endZ) + 0.02;
-      G.addRampBranch([sx, sz, pth.p[2], pth.p[3], endX, endZ], 6.5, R.y(sJ), yEnd, 3.4);
+      // leave the deck where the path can fall as close as possible to the ramp's own gradient
+      const endX = pth.p[4], endZ = pth.p[5], yEnd = T.base(endX, endZ) + 0.02, rg = (R.y1 - R.y0) / R.L;
+      let sJ = 30, bestG = -1;
+      for (let s2 = 30; s2 <= 42; s2 += 0.25) { const a = R.at(s2), o = R.outW(s2), gr = (R.y(s2) - yEnd) / Math.hypot(a.x - a.nx * o - endX, a.z - a.nz * o - endZ); if (gr <= rg && gr > bestG) { bestG = gr; sJ = s2; } }
+      const a = R.at(sJ), o = R.outW(sJ), ex = a.x - a.nx * o, ez = a.z - a.nz * o, L0 = Math.hypot(endX - ex, endZ - ez), ux = (endX - ex) / L0, uz = (endZ - ez) / L0;
+      const sx = ex - ux * 0.4, sz = ez - uz * 0.4, Lb = L0 + 0.4;   // starts just inside the deck edge: one surface
+      // as wide as the ramp, narrowing only where buildings force it
+      const full = 6.9, wTab = [];
+      for (let sb = 0; sb <= Lb + 0.01; sb += 0.5) {
+        const cx = sx + ux * sb, cz = sz + uz * sb; let hw = full / 2;
+        for (const sd of [-1, 1]) for (let t = 0.3; t <= full / 2 + 0.3; t += 0.1) { const v = grid.get(cx - uz * sd * t, cz + ux * sd * t); if (v === G.BUILDING || v === G.TREE) { hw = Math.min(hw, t - 0.3); break; } }
+        wTab.push(Math.max(2.6, hw * 2));
+      }
+      for (let i = 1; i < wTab.length; i++) wTab[i] = Math.min(wTab[i], wTab[i - 1] + 0.35);
+      for (let i = wTab.length - 2; i >= 0; i--) wTab[i] = Math.min(wTab[i], wTab[i + 1] + 0.35);
+      G.addRampBranch([sx, sz, endX, endZ], wTab, yEnd);
+      G._branchInfo = { sJ, grad: (R.y(sJ) - yEnd) / L0, rampGrad: rg };
     }
   }
   for (const l of D.lines) {

@@ -14,6 +14,11 @@ const BLEND = 6;             // courtyard floor rises back to ground over this d
 R.SHOP_CLEAR = SHOP_CLEAR; R.SLAB = SLAB;
 
 G.setupRamp = (pts, y0, y1, outEnd) => {
+  // resample the mapped wall line to 0.75 m and smooth it into an even curve (no kinks on the inner edge)
+  { const P = []; for (let k = 0; k + 3 < pts.length; k += 2) { const l = Math.hypot(pts[k + 2] - pts[k], pts[k + 3] - pts[k + 1]), n = Math.max(1, Math.round(l / 0.75)); for (let q = 0; q < n; q++) P.push([pts[k] + (pts[k + 2] - pts[k]) * q / n, pts[k + 1] + (pts[k + 3] - pts[k + 1]) * q / n]); }
+    P.push([pts[pts.length - 2], pts[pts.length - 1]]);
+    for (let pass = 0; pass < 6; pass++) { const Q = P.map((p) => p.slice()); for (let i = 2; i < P.length - 2; i++) for (let c = 0; c < 2; c++) Q[i][c] = (P[i - 2][c] + P[i - 1][c] * 2 + P[i][c] * 3 + P[i + 1][c] * 2 + P[i + 2][c]) / 9; P.splice(0, P.length, ...Q); }
+    pts = P.flat(); }
   const segs = []; let L = 0;
   for (let k = 0; k + 3 < pts.length; k += 2) {
     const ax = pts[k], az = pts[k + 1], bx = pts[k + 2], bz = pts[k + 3], l = Math.hypot(bx - ax, bz - az);
@@ -23,6 +28,14 @@ G.setupRamp = (pts, y0, y1, outEnd) => {
   const c = G.centroid(pts), mid = segs[Math.floor(segs.length / 2)];
   const nx0 = -mid.uz, nz0 = mid.ux, side = Math.sign((c.x - mid.ax) * nx0 + (c.z - mid.az) * nz0) || 1;
   for (const g of segs) { g.nx = -g.uz * side; g.nz = g.ux * side; }
+  // vertex tangents/normals (bisectors) so the deck's cross-sections turn smoothly round the curve's corners
+  for (let i = 0; i < segs.length; i++) {
+    const g = segs[i], pv = segs[i - 1], nx = segs[i + 1];
+    const t0x = pv ? pv.ux + g.ux : g.ux, t0z = pv ? pv.uz + g.uz : g.uz, l0 = Math.hypot(t0x, t0z);
+    g.tax = t0x / l0; g.taz = t0z / l0; g.nax = -g.taz * side; g.naz = g.tax * side;
+    const t1x = nx ? nx.ux + g.ux : g.ux, t1z = nx ? nx.uz + g.uz : g.uz, l1 = Math.hypot(t1x, t1z);
+    g.tbx = t1x / l1; g.tbz = t1z / l1; g.nbx = -g.tbz * side; g.nbz = g.tbx * side;
+  }
   Object.assign(R, { ok: true, pts, segs, L, y0, y1, outEnd: outEnd || OUT_W, shops: [] });
   const bb = G.bbox(pts); R.bb = [bb[0] - 12, bb[1] - 12, bb[2] + 12, bb[3] + 12];
   // map "angle round the courtyard" -> distance along the ramp, so the sunken floor is one smooth surface
@@ -42,29 +55,52 @@ R.outW = (s) => OUT_W + (R.outEnd - OUT_W) * G.clamp((s - (R.L - 6)) / 6, 0, 1);
 R.at = (s) => {
   s = G.clamp(s, 0, R.L); let g = R.segs[R.segs.length - 1];
   for (const q of R.segs) if (s <= q.s0 + q.l) { g = q; break; }
-  const k = (s - g.s0) / g.l; return { x: g.ax + (g.bx - g.ax) * k, z: g.az + (g.bz - g.az) * k, nx: g.nx, nz: g.nz, ux: g.ux, uz: g.uz };
+  const k = (s - g.s0) / g.l; let nx = g.nax + (g.nbx - g.nax) * k, nz = g.naz + (g.nbz - g.naz) * k; const nl = Math.hypot(nx, nz);
+  return { x: g.ax + (g.bx - g.ax) * k, z: g.az + (g.bz - g.az) * k, nx: nx / nl, nz: nz / nl, ux: g.ux, uz: g.uz };
 };
 // position relative to the ramp: s along it, t across (positive = inward, toward the courtyard)
 const loc = { s: 0, t: 0, d: 0 };
+// smooth mapping: each segment owns the region between the bisector lines at its two ends; inside it the
+// position along is the ratio of distances to those lines (continuous across corners, no jumps in height)
 R.locate = (x, z) => {
   if (!R.ok || x < R.bb[0] || x > R.bb[2] || z < R.bb[1] || z > R.bb[3]) return null;
-  let best = Infinity;
-  for (const g of R.segs) {
-    const u = G.clamp((x - g.ax) * g.ux + (z - g.az) * g.uz, 0, g.l), px = g.ax + g.ux * u, pz = g.az + g.uz * u, d = Math.hypot(x - px, z - pz);
-    if (d < best) { best = d; loc.s = g.s0 + u; loc.t = (x - px) * g.nx + (z - pz) * g.nz; loc.d = d; }
+  let best = Infinity; const n = R.segs.length;
+  for (let i = 0; i < n; i++) {
+    const g = R.segs[i];
+    let a = (x - g.ax) * g.tax + (z - g.az) * g.taz, b = (x - g.bx) * g.tbx + (z - g.bz) * g.tbz;
+    if ((a < 0 && i > 0) || (b > 0 && i < n - 1)) continue;
+    let u; if (i === 0 && a < 0) u = a; else if (i === n - 1 && b > 0) u = g.l + b; else u = g.l * a / (a - b || 1e-9);
+    const k = G.clamp(u / g.l, 0, 1), px = g.ax + g.ux * u, pz = g.az + g.uz * u;
+    let nx = g.nax + (g.nbx - g.nax) * k, nz = g.naz + (g.nbz - g.naz) * k; const nl = Math.hypot(nx, nz); nx /= nl; nz /= nl;
+    const t = (x - px) * nx + (z - pz) * nz, d = Math.abs(t);
+    if (d < best) { best = d; loc.s = g.s0 + u; loc.t = t; loc.d = d; }
   }
+  if (best === Infinity) return null;
   return loc;
 };
 // branches: walkways leaving the deck and sloping down at one constant gradient (e.g. the path to the passage)
 R.branches = [];
-G.addRampBranch = (pts, width, y0, y1, width1) => {
+// A branch is part of the same ramp: it starts on the deck (heights across its start line are the deck's own
+// heights there), then every line along it falls at one constant gradient to y1. wTab = widths every 0.5 m.
+G.addRampBranch = (pts, wTab, y1) => {
   const segs = []; let L = 0;
   for (let k = 0; k + 3 < pts.length; k += 2) { const ax = pts[k], az = pts[k + 1], bx = pts[k + 2], bz = pts[k + 3], l = Math.hypot(bx - ax, bz - az); segs.push({ ax, az, bx, bz, l, s0: L, ux: (bx - ax) / l, uz: (bz - az) / l }); L += l; }
-  const w1 = width1 !== undefined ? width1 : width, wm = Math.max(width, w1);
-  const bb = G.bbox(pts), br = { pts, segs, L, w: wm, y0, y1, bb: [bb[0] - wm, bb[1] - wm, bb[2] + wm, bb[3] + wm] };
-  br.y = (s) => y0 + (y1 - y0) * G.clamp(s / L, 0, 1);
-  br.wAt = (s) => width + (w1 - width) * G.clamp(s / L, 0, 1);
-  br.at = (s) => { s = G.clamp(s, 0, L); let g = segs[segs.length - 1]; for (const q of segs) if (s <= q.s0 + q.l) { g = q; break; } const k = (s - g.s0) / g.l; return { x: g.ax + (g.bx - g.ax) * k, z: g.az + (g.bz - g.az) * k, ux: g.ux, uz: g.uz, nx: -g.uz, nz: g.ux }; };
+  const wm = Math.max(...wTab), bb = G.bbox(pts);
+  const br = { pts, segs, L, w: wm, y1, bb: [bb[0] - wm, bb[1] - wm, bb[2] + wm, bb[3] + wm] };
+  br.wAt = (sb) => { const f = G.clamp(sb / 0.5, 0, wTab.length - 1), i = Math.min(wTab.length - 2, Math.floor(f)); return wTab[i] + (wTab[i + 1] - wTab[i]) * (f - i); };
+  br.at = (sb) => { sb = G.clamp(sb, 0, L); let g = segs[segs.length - 1]; for (const q of segs) if (sb <= q.s0 + q.l) { g = q; break; } const k = (sb - g.s0) / g.l; return { x: g.ax + (g.bx - g.ax) * k, z: g.az + (g.bz - g.az) * k, ux: g.ux, uz: g.uz, nx: -g.uz, nz: g.ux }; };
+  // for each line along the path (lateral offset d): where it leaves the deck (sE) and the deck height there (yE)
+  const g0 = segs[0], sE = [], yE = [];
+  for (let d = -wm / 2 - 0.5; d <= wm / 2 + 0.51; d += 0.25) {
+    let se = 0, ye = null;
+    for (let sb = 0; sb <= L; sb += 0.02) { const x = g0.ax + g0.ux * sb - g0.uz * d, z = g0.az + g0.uz * sb + g0.ux * d, m = R.mainAt(x, z); if (m === null) { se = sb; break; } ye = m; se = sb; }
+    if (ye === null) { const l = R.locate(g0.ax - g0.uz * d, g0.az + g0.ux * d); ye = l ? R.y(l.s) : R.y(0); }
+    sE.push(se); yE.push(ye);
+  }
+  const lerpTab = (tab, d) => { const f = G.clamp((d + wm / 2 + 0.5) / 0.25, 0, tab.length - 1), i = Math.min(tab.length - 2, Math.floor(f)); return tab[i] + (tab[i + 1] - tab[i]) * (f - i); };
+  br.h = (sb, d) => { const se = lerpTab(sE, d), ye = lerpTab(yE, d); if (sb <= se) return ye; return ye + (y1 - ye) * G.clamp((sb - se) / (L - se), 0, 1); };
+  br.inDeck = (sb, d) => sb < lerpTab(sE, d) - 0.02;
+  br.y0 = br.h(0, 0); br.y = (sb) => br.h(sb, 0);
   R.branches.push(br); if (R.ok) { R.bb[0] = Math.min(R.bb[0], br.bb[0]); R.bb[1] = Math.min(R.bb[1], br.bb[1]); R.bb[2] = Math.max(R.bb[2], br.bb[2]); R.bb[3] = Math.max(R.bb[3], br.bb[3]); }
   return br;
 };
@@ -74,8 +110,9 @@ const branchAt = (x, z) => {
     if (x < br.bb[0] || x > br.bb[2] || z < br.bb[1] || z > br.bb[3]) continue;
     for (const g of br.segs) {
       const u = (x - g.ax) * g.ux + (z - g.az) * g.uz; if (u < -0.01 || u > g.l + 0.01) continue;
-      const sb = g.s0 + G.clamp(u, 0, g.l), d = Math.abs((x - g.ax) * -g.uz + (z - g.az) * g.ux); if (d > br.wAt(sb) / 2) continue;
-      const y = br.y(sb); if (best === null || y > best) best = y;
+      const sb = g.s0 + G.clamp(u, 0, g.l), d = (x - g.ax) * -g.uz + (z - g.az) * g.ux; if (Math.abs(d) > br.wAt(sb) / 2) continue;
+      if (br.inDeck(sb, d)) continue;
+      const y = br.h(sb, d); if (best === null || y > best) best = y;
     }
   }
   return best;
@@ -180,7 +217,8 @@ G.buildRamp = () => {
     B.quad(P(s, oa, ya), P(s2, ob, yb), P(s2, IN_W, yb), P(s, IN_W, ya), null, paving);
     // outer face down to the ground
     const ga = T.base(...[P(s, oa, 0)].map((p) => [p[0], p[2]])[0]) - 0.3, gb = T.base(...[P(s2, ob, 0)].map((p) => [p[0], p[2]])[0]) - 0.3;
-    B.quad(P(s, oa, ga), P(s2, ob, gb), P(s2, ob, yb), P(s, oa, ya), null, stone);
+    const joinedHere = R.branches.length && branchAt(...[P((s + s2) / 2, (oa + ob) / 2 - 0.3, 0)].map((p) => [p[0], p[2]])[0]) !== null;
+    if (!joinedHere) B.quad(P(s, oa, ga), P(s2, ob, gb), P(s2, ob, yb), P(s, oa, ya), null, stone);
     // inner face: shopfront or solid wall down to the courtyard
     const sh = inShop((s + s2) / 2);
     const fa = G.groundAt(...[P(s, IN_W + 0.3, 0)].map((p) => [p[0], p[2]])[0], -1e4) - 0.3, fb = G.groundAt(...[P(s2, IN_W + 0.3, 0)].map((p) => [p[0], p[2]])[0], -1e4) - 0.3;
@@ -231,10 +269,15 @@ G.buildRamp = () => {
   // branches: sloping walkway with side walls down to the ground, railing only where it's high
   for (const br of R.branches) {
     for (let s = 0; s < br.L - 1e-6; s += 0.5) {
-      const s2 = Math.min(br.L, s + 0.5), a = br.at(s), b = br.at(s2), ya = br.y(s) - 0.005, yb = br.y(s2) - 0.005, h = br.wAt(s) / 2, h2 = br.wAt(s2) / 2;
+      const s2 = Math.min(br.L, s + 0.5), a = br.at(s), b = br.at(s2), h = br.wAt(s) / 2, h2 = br.wAt(s2) / 2, NS = 6;
+      for (let k = 0; k < NS; k++) {   // top surface in strips so its height follows the deck across the join
+        const da0 = -h + 2 * h * k / NS, da1 = -h + 2 * h * (k + 1) / NS, db0 = -h2 + 2 * h2 * k / NS, db1 = -h2 + 2 * h2 * (k + 1) / NS;
+        const V = (q, sb, d) => [q.x + q.nx * d, br.h(sb, d) - 0.004, q.z + q.nz * d];
+        B.quad(V(a, s, da0), V(b, s2, db0), V(b, s2, db1), V(a, s, da1), null, paving);
+      }
       const L0 = [a.x - a.nx * h, a.z - a.nz * h], R0 = [a.x + a.nx * h, a.z + a.nz * h], L1 = [b.x - b.nx * h2, b.z - b.nz * h2], R1 = [b.x + b.nx * h2, b.z + b.nz * h2];
-      B.quad([L0[0], ya, L0[1]], [L1[0], yb, L1[1]], [R1[0], yb, R1[1]], [R0[0], ya, R0[1]], null, paving);
-      for (const [p0, p1] of [[L0, L1], [R0, R1]]) {
+      for (const [p0, p1, sd] of [[L0, L1, -1], [R0, R1, 1]]) {
+        const ya = br.h(s, sd * h), yb = br.h(s2, sd * h2);
         const g0 = G.groundAt(p0[0] + (p0[0] - a.x) * 0.15, p0[1] + (p0[1] - a.z) * 0.15, -1e4) - 0.2, g1 = G.groundAt(p1[0] + (p1[0] - b.x) * 0.15, p1[1] + (p1[1] - b.z) * 0.15, -1e4) - 0.2;
         if (ya - g0 > 0.05 || yb - g1 > 0.05) B.quad([p0[0], g0, p0[1]], [p1[0], g1, p1[1]], [p1[0], yb, p1[1]], [p0[0], ya, p0[1]], null, stone);
         if (R.mainAt(p0[0], p0[1]) === null && ya - (g0 + 0.2) > 0.9) railing(p0[0], p0[1], p1[0], p1[1], ya, yb, Math.round(s * 2));
