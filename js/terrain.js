@@ -184,9 +184,9 @@ T.phys = (x, z) => {
   if (l) {
     const sh = stairAt(l); if (sh !== null) return sh;
     if (U.act[l.i] && Math.abs(l.t) <= U.hw[l.i]) return floorAt(l.s);
-    const fb = fillAt(l, T.base(x, z)), rp = rampAt(x, z); return rp !== null ? Math.max(fb, rp) : fb;
+    return fillAt(l, T.base(x, z));
   }
-  const b = T.base(x, z), rp = rampAt(x, z); return rp !== null ? Math.max(b, rp) : b;
+  return T.base(x, z);
 };
 // terrain used for the mesh (carved a bit wider; the strip is hidden by walls / copings / the deck)
 T.mesh = (x, z) => {
@@ -204,10 +204,15 @@ T.deck = (x, z, pad = 0) => {
   return deckAt(l.i, l.t);
 };
 // ground height for something currently at height y (picks deck vs tunnel floor)
+const RAMP_HEADROOM = 2.2, RAMP_SLAB = 0.35;
+T.RAMP_HEADROOM = RAMP_HEADROOM; T.RAMP_SLAB = RAMP_SLAB;
 G.groundAt = (x, z, y = 1e4) => {
   const d = T.deck(x, z);
-  if (d !== null && y > d - 2.5) return d;
-  return T.phys(x, z);
+  const g = (d !== null && y > d - 2.5) ? d : T.phys(x, z);
+  const rp = rampAt(x, z);
+  // on the ramp, unless you're underneath a part that's high enough to walk under
+  if (rp !== null && rp > g && (rp - g < RAMP_HEADROOM || y > rp - RAMP_HEADROOM)) return rp;
+  return g;
 };
 // in the covered tunnel space?
 G.inTunnel = (x, z, y) => { const d = T.deck(x, z); return d !== null && y < d - 2.5; };
@@ -222,7 +227,10 @@ G.pointSolid = (x, y, z, gridFn) => {
       const sh = stairAt(l); return y < (sh !== null ? sh : floorAt(l.s));
     }
   }
-  if (y < T.phys(x, z) - 0.15) return true;
+  const tp = T.phys(x, z);
+  if (y < tp - 0.15) return true;
+  const rp = rampAt(x, z);
+  if (rp !== null && y < rp && (y > rp - RAMP_SLAB || rp - tp < RAMP_HEADROOM)) return true;   // ramp slab / solid low part
   return gridFn ? gridFn(G.grid.get(x, z)) : false;
 };
 // march a 3D segment; returns fraction of the first blocked sample or 1

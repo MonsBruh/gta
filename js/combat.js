@@ -286,10 +286,10 @@ G.setupShops = () => {
   for (const p of window.CAMPUS.pois) {
     if (!p.n || !kinds.has(p.k)) continue;
     if (Math.abs(p.x) > G.HW - 10 || Math.abs(p.z) > G.HH - 10) continue;
-    const f = G.grid.nearestFree(p.x, p.z, (v) => v === G.FREE, 30);
+    const f = p.y !== undefined ? { x: p.x, z: p.z } : G.grid.nearestFree(p.x, p.z, (v) => v === G.FREE, 30);   // explicit spot (e.g. Spar upstairs)
     if (Math.hypot(f.x - p.x, f.z - p.z) > 30) continue;
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.05, 24).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xffd34a, transparent: true, opacity: 0.8, depthWrite: false }));
-    const gy = G.groundAt(f.x, f.z); ring.position.set(f.x, gy + 0.06, f.z); G.scene.add(ring);
+    const gy = p.y !== undefined ? p.y : G.groundAt(f.x, f.z); ring.position.set(f.x, gy + 0.06, f.z); G.scene.add(ring);
     const lbl = G.makeLabel('$ ' + p.n, { size: 0.7, depthTest: false, accent: '#3fbf5a' }); lbl.position.set(f.x, gy + 2.4, f.z); G.scene.add(lbl);
     G.shops.push({ n: p.n, x: f.x, y: gy, z: f.z, ring, lbl, cooldown: 0, prog: 0 });
   }

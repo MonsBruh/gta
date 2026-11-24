@@ -157,6 +157,8 @@ G.buildWorld = async (status) => {
     const ya = T.base(pts[0], pts[1]) + 0.05;
     let grad = (samples[samples.length - 1][1] + 1.8 - ya) / L;
     for (const [sd, gh] of samples) if (sd > 2) grad = Math.max(grad, (gh + 0.12 - ya) / sd);
+    const FIRST_FLOOR = 4.1;   // shop ground floor (3.5 m) + floor slab; the ramp lands here, in front of Spar
+    grad = Math.max(grad, (T.base(pts[pts.length - 2], pts[pts.length - 1]) + FIRST_FLOOR - ya) / L);
     G._ramp = T.addRamp(pts, 1.6, ya, ya + grad * L); G._ramp.line = rampLine;
   }
   for (const l of D.lines) {
@@ -222,6 +224,69 @@ G.buildWorld = async (status) => {
     // solid where drawn
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) if (M[j * nx + i]) grid.set(ox + (i + 0.5) * C, oz + (j + 0.5) * C, G.BUILDING);
   }
+  // ground-floor shop units round the Bowland South courtyard (as in the real photo): each gets its own
+  // shopfront, ~3.5 m high and ~7 m deep, recessed into its building; the floors above bridge over it
+  G._shopUnits = [];
+  {
+    const SHOPS = [
+      { n: "Wong's Oriental Market", sign: "WONG'S", bg: '#c4122f', fg: '#ffffff' },
+      { n: 'Wok Inn', sign: 'WOK INN', bg: '#b3121f', fg: '#ffe9a8' },
+      { n: 'Sultan of Lancaster Experience', sign: 'SULTAN', bg: '#1d4f3a', fg: '#f3d27a' },
+      { n: 'Friends Bistro', sign: 'Friends', bg: '#2a2a2e', fg: '#ffffff' },
+      { n: "KC's African & Caribbean Cuisine", sign: "KC'S", bg: '#f2f2f2', fg: '#c4122f' },
+    ];
+    const polys = [...D.buildings.filter((b) => !(b.t === 'roof' || b.mh > 0)), ...D.parts.filter((b) => !(b.mh > 0)), ...G._greenFill];
+    const REM = REMOVE[0];
+    const isDrawnHere = (b, x, z) => !(REM && b.n === REM.n && !b._fill && !REM.keep.some((k) => k[0] * x + k[1] * z <= k[2]));
+    const W0 = 6.2;
+    for (const sh of SHOPS) {
+      const poi = D.pois.find((q) => q.n === sh.n); if (!poi) continue;
+      // candidate facade points on every wall near the shop, nearest first (curved walls are many short edges)
+      const cands = [];
+      for (const b of polys) {
+        const bb = G.bbox(b.p); if (poi.x < bb[0] - 25 || poi.x > bb[2] + 25 || poi.z < bb[1] - 25 || poi.z > bb[3] + 25) continue;
+        const p = b.p, n = p.length / 2;
+        for (let i = 0; i < n; i++) {
+          const j = (i + 1) % n, ax = p[i * 2], az = p[i * 2 + 1], bx = p[j * 2], bz = p[j * 2 + 1], dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz); if (L < 1.2) continue;
+          for (let q = 0; q <= Math.ceil(L); q++) {
+            const t = q / Math.ceil(L), px = ax + dx * t, pz = az + dz * t;
+            let nx2 = dz / L, nz2 = -dx / L; if (G.pip(px + nx2 * 0.4, pz + nz2 * 0.4, p)) { nx2 = -nx2; nz2 = -nz2; }   // outward normal
+            cands.push({ d: Math.hypot(poi.x - px, poi.z - pz), px, pz, ux: dx / L, uz: dz / L, nx: nx2, nz: nz2, b });
+          }
+        }
+      }
+      cands.sort((a, c) => a.d - c.d);
+      const fits = (c) => {
+        if (c.d > 22 || !isDrawnHere(c.b, c.px, c.pz)) return false;
+        for (const a of [-W0 / 2, 0, W0 / 2]) {                                     // whole front faces open ground, and is a wall all along
+          const fx = c.px + c.ux * a, fz = c.pz + c.uz * a;
+          if (grid.get(fx + c.nx * 1.4, fz + c.nz * 1.4) !== G.FREE) return false;
+          if (grid.get(fx - c.nx * 1.0, fz - c.nz * 1.0) !== G.BUILDING) return false;
+        }
+        return !G._shopUnits.some((o) => Math.hypot(o.px - c.px, o.pz - c.pz) < (o.W + W0) / 2 + 0.6);   // no overlapping units
+      };
+      const best = cands.find(fits);
+      if (!best) continue;
+      const W = W0;
+      // shop floor: level, at the highest ground inside the unit (a small step up from the pavement)
+      let g = -Infinity; for (let t = 0; t >= -7; t -= 1) for (const a of [-W / 2, 0, W / 2]) g = Math.max(g, T.base(best.px + best.ux * a + best.nx * t, best.pz + best.uz * a + best.nz * t));
+      g += 0.05; const gOut = G.groundAt(best.px + best.nx * 0.8, best.pz + best.nz * 0.8);
+      const unit = { ...sh, ...best, W, depth: 7, g, gOut, clear: 3.5 };
+      G._shopUnits.push(unit);
+      // recess = a "passage" running inward from the facade (not cleared for walking: the glass front is solid)
+      passages.push({ ax: best.px, az: best.pz, ux: -best.nx, uz: -best.nz, L: unit.depth, W, e: 0.4, shop: true, clearAbs: g + unit.clear });
+    }
+    // Spar moves up to the first floor, directly above KC's, where the ramp lands
+    const kc = G._shopUnits.find((u) => u.n.startsWith("KC's")), spar = D.pois.find((q) => q.n === 'Spar');
+    if (kc && spar && G._ramp) {
+      kc.upper = { sign: 'SPAR', bg: '#ffffff', fg: '#e0001b', y: Math.max(G._ramp.y1, kc.g + kc.clear) };
+      const R = G._ramp; let bestS = 0, bd = Infinity;
+      for (const sg of R.segs) for (let q = 0; q <= 10; q++) { const x = sg.ax + (sg.bx - sg.ax) * q / 10, z = sg.az + (sg.bz - sg.az) * q / 10, d = Math.hypot(x - kc.px, z - kc.pz); if (d < bd) { bd = d; bestS = sg.s0 + sg.l * q / 10; } }
+      const sOn = Math.min(R.L - 0.8, bestS); let mx = 0, mz = 0;
+      for (const sg of R.segs) if (sOn >= sg.s0 && sOn <= sg.s0 + sg.l) { const k = (sOn - sg.s0) / sg.l; mx = sg.ax + (sg.bx - sg.ax) * k; mz = sg.az + (sg.bz - sg.az) * k; }
+      spar.x = mx; spar.z = mz; spar.y = R.y0 + (R.y1 - R.y0) * sOn / R.L; spar.upper = true;
+    }
+  }
 
   // ---------------- trees ----------------
   status('Planting trees…'); await tick();
@@ -261,6 +326,7 @@ G.buildWorld = async (status) => {
 
   // clear the whole width of every building passage (matches the opening cut in the building below)
   for (const ps of passages) {
+    if (ps.shop) continue;
     const vx = -ps.uz, vz = ps.ux;
     for (let a = -ps.e; a <= ps.L + ps.e; a += 0.25) for (let t = -ps.W / 2 + 0.15; t <= ps.W / 2 - 0.15; t += 0.25) {
       const x = ps.ax + ps.ux * a + vx * t, z = ps.az + ps.uz * a + vz * t, v = grid.get(x, z);
@@ -537,7 +603,7 @@ G.buildWorld = async (status) => {
         const holesIn = (reg) => (pc.hl || []).map((h) => clipRegion(h, reg)).filter((h) => h.length >= 6 && Math.abs(G.polyArea(h)) > 0.3);
         // the building above the passage becomes a bridge with a ~3 m clear walkway underneath
         let gmax = -Infinity; for (let k = 0; k < mid.length; k += 2) gmax = Math.max(gmax, G.groundAt(mid[k], mid[k + 1]));
-        next.push(cutPiece(pc, mid, R.middle, { hl: holesIn(R.middle), _bridge: true, _bottom: gmax + 3.1 }));
+        next.push(cutPiece(pc, mid, R.middle, { hl: holesIn(R.middle), _bridge: true, _bottom: ps.clearAbs !== undefined ? ps.clearAbs : gmax + 3.1, _shop: !!ps.shop }));
         for (const reg of R.rest) { const q = clipRegion(pc.p, reg); if (q.length >= 6 && Math.abs(G.polyArea(q)) > 0.5) next.push(cutPiece(pc, q, reg, { hl: holesIn(reg) })); }
       }
       if (touched) pieces = next;
@@ -551,7 +617,8 @@ G.buildWorld = async (status) => {
     for (const k of rm.keep) { const q = clipRegion(b.p, [k]); if (q.length >= 6 && Math.abs(G.polyArea(q)) > 1) out.push(cutPiece({ ...b, _src: b }, q, [k], { hl: (b.hl || []).map((h) => clipRegion(h, [k])).filter((h) => h.length >= 6) })); }
     return out;
   };
-  for (const g of G._greenFill) { const ol = outlines.find((o) => o.n === g.n); if (ol) { g._col = ol._col; g.m = ol.m; g.h = ol.h; } }
+  for (const g of G._greenFill) { const ol = outlines.find((o) => o.n === g.n); if (ol) { g._col = ol._col; g.m = ol.m; } g.h = 8.4; g._wallHex = '#a47c55'; }
+  for (const pt of D.parts) if (pt.n === 'Slaidburn House') pt._twoTone = { split: 8.4, lower: '#a47c55', upper: '#e6e2d8' };
   for (const b0 of [...D.buildings.filter((b) => !b.hp), ...outlines, ...D.parts, ...G._greenFill]) for (const b of b0._fill ? [b0] : removeSections(b0)) for (const pc of splitByPassages(b)) allB.push(pc);
   // collision must match what's drawn: for buildings that were cut up (passages / removed sections) or redrawn
   // from an outline, any solid cell not within ~0.3 m of a drawn piece becomes walkable (no invisible slivers)
@@ -590,7 +657,7 @@ G.buildWorld = async (status) => {
     const raised = b.mh > 0 || b._bottom !== undefined;
     // wall feet follow the ground (never below the tunnel ceiling) instead of one flat base
     const foot = (x, z) => { if (raised) return base; let f = T.surf(x, z) - 0.8; const d = T.deck(x, z, 2.7); if (d !== null) f = Math.max(f, d - 0.7); return f; };
-    const wc = wallColour(b._col || b), top = Math.max(base + 0.5, gAvg + Math.max((b.mh || 0) + 0.5, b.h));
+    const wc = b._wallHex ? hex(b._wallHex) : wallColour(b._col || b), top = Math.max(base + 0.5, gAvg + Math.max((b.mh || 0) + 0.5, b.h));
     if (b._bridge && top < base + 0.6) continue;   // low building: the passage is simply open
     G._bldBase = G._bldBase || []; G._bldBase.push({ b, base, top });
     const plain = PLAIN.has(b.t) || (b.h - (b.mh || 0)) < 3;
@@ -616,8 +683,16 @@ G.buildWorld = async (status) => {
           const f0 = Math.min(foot(x0, z0), top - 0.5), f1 = Math.min(foot(x1, z1), top - 0.5);
           const A = [x0, f0, z0], B = [x1, f1, z1], C = [x1, top, z1], Dd = [x0, top, z0];
           const u0 = (acc + L * q / m) / 5.2, u1 = (acc + L * (q + 1) / m) / 5.2, va = (f0 - gAvg) / 6.6, vb = (f1 - gAvg) / 6.6, v1 = (top - gAvg) / 6.6;
-          if (same) W.quad(A, B, C, Dd, [nxn, 0, nzn], col, [[u0, va], [u1, vb], [u1, v1], [u0, v1]]);
-          else W.quad(B, A, Dd, C, [nxn, 0, nzn], col, [[u1, vb], [u0, va], [u0, v1], [u1, v1]]);
+          const band = (ya0, yb0, ytop, c) => {   // one coloured band of the wall between two heights
+            const A2 = [x0, ya0, z0], B2 = [x1, yb0, z1], C2 = [x1, ytop, z1], D2 = [x0, ytop, z0], v0a = (ya0 - gAvg) / 6.6, v0b = (yb0 - gAvg) / 6.6, vt = (ytop - gAvg) / 6.6;
+            if (same) W.quad(A2, B2, C2, D2, [nxn, 0, nzn], c, [[u0, v0a], [u1, v0b], [u1, vt], [u0, vt]]);
+            else W.quad(B2, A2, D2, C2, [nxn, 0, nzn], c, [[u1, v0b], [u0, v0a], [u0, vt], [u1, vt]]);
+          };
+          if (b._twoTone) {
+            const sy = gAvg + b._twoTone.split;
+            if (sy > Math.max(f0, f1) && sy < top) { band(f0, f1, sy, jitter(hex(b._twoTone.lower), r, 0.03)); band(sy, sy, top, jitter(hex(b._twoTone.upper), r, 0.02)); }
+            else band(f0, f1, top, jitter(hex(sy >= top ? b._twoTone.lower : b._twoTone.upper), r, 0.03));
+          } else band(f0, f1, top, col);
         }
         acc += L;
       }
@@ -651,11 +726,12 @@ G.buildWorld = async (status) => {
     }
     if ((b.n || b.t === 'university' || b.t === 'residential') && !b._bridge) {
       // one entry (and one label) per original building, even if a passage split it into pieces
-      const src = b._src || b, prev = G.buildingList.find((e) => e.src === src);
+      const src = b._src || b, prev = G.buildingList.find((e) => e.src === src || (src.n && e.n === src.n && Math.hypot(e.x - G.centroid(src.p).x, e.z - G.centroid(src.p).z) < 120));
       if (prev) prev.h = Math.max(prev.h, top);
       else { const c = G.centroid(src.p); G.buildingList.push({ n: src.n, x: c.x, z: c.z, h: top, p: src.p, t: src.t, src }); }
     }
   }
+  if (G._shopUnits.length) G.buildShopfronts(G._shopUnits);
   for (const [B, mat] of [[BW, winMat], [BP, plainMat], [BR, roofMat]]) {
     const m = B.mesh(mat); m.castShadow = true; m.receiveShadow = true; scene.add(m);
   }
@@ -701,8 +777,20 @@ G.buildWorld = async (status) => {
         const gL = Math.min(T.base(xa + vx, za + vz), T.base(xb + vx, zb + vz)) - 0.3, gR = Math.min(T.base(xa - vx, za - vz), T.base(xb - vx, zb - vz)) - 0.3;
         const P = (x, y, z) => [x, y, z];
         HB.quad(P(xa + vx, ya, za + vz), P(xb + vx, yb, zb + vz), P(xb - vx, yb, zb - vz), P(xa - vx, ya, za - vz), [0, 1, 0], top);
-        HB.quad(P(xa + vx, gL, za + vz), P(xb + vx, gL, zb + vz), P(xb + vx, yb, zb + vz), P(xa + vx, ya, za + vz), null, side);
-        HB.quad(P(xb - vx, gR, zb - vz), P(xa - vx, gR, za - vz), P(xa - vx, ya, za - vz), P(xb - vx, yb, zb - vz), null, side);
+        const gm = T.base((xa + xb) / 2, (za + zb) / 2), high = Math.min(ya, yb) - gm >= T.RAMP_HEADROOM;
+        const bl = high ? ya - T.RAMP_SLAB : gL, br = high ? yb - T.RAMP_SLAB : gR;
+        HB.quad(P(xa + vx, high ? bl : gL, za + vz), P(xb + vx, high ? br : gL, zb + vz), P(xb + vx, yb, zb + vz), P(xa + vx, ya, za + vz), null, side);
+        HB.quad(P(xb - vx, high ? br : gR, zb - vz), P(xa - vx, high ? bl : gR, za - vz), P(xa - vx, ya, za - vz), P(xb - vx, yb, zb - vz), null, side);
+        if (high) {
+          HB.quad(P(xa - vx, bl, za - vz), P(xb - vx, br, zb - vz), P(xb + vx, br, zb + vz), P(xa + vx, bl, za + vz), [0, -1, 0], side);   // underside
+          if (Math.floor(sb / 4) !== Math.floor(sa / 4)) for (const sd of [-0.6, 0.6]) {                                             // columns every 4 m
+            const cx = xb + (-uz) * sd, cz = zb + ux * sd; HB.box(cx - ux * 0.15, cz - uz * 0.15, cx + ux * 0.15, cz + uz * 0.15, 0.3, T.base(cx, cz) - 0.2, br, side);
+            grid.disc(cx, cz, 0.2, G.TREE, (v) => v === G.FREE);
+          }
+          // railings on top where it's high
+          HB.box(xa + vx * 0.95, za + vz * 0.95, xb + vx * 0.95, zb + vz * 0.95, 0.06, ya, ya + 1.05, side);
+          HB.box(xa - vx * 0.95, za - vz * 0.95, xb - vx * 0.95, zb - vz * 0.95, 0.06, ya, ya + 1.05, side);
+        }
       }
     }
     const e = R.segs[R.segs.length - 1], ux = (e.bx - e.ax) / e.l, uz = (e.bz - e.az) / e.l, vx = -uz * R.width / 2, vz = ux * R.width / 2, gy = T.base(e.bx, e.bz) - 0.3;
@@ -748,7 +836,7 @@ G.buildWorld = async (status) => {
     if (p.k === 'street_lamp') lamps.push(p); else if (p.k === 'bench') benches.push(p); else if (p.k === 'bollard') bollards.push(p);
     else if (p.k === 'waste_basket' || p.k === 'recycling') bins.push(p); else if (p.k === 'bus_stop') stops.push(p);
   }
-  const propY = (p) => (p.k === 'bus_stop' && T.deck(p.x, p.z) !== null) ? T.phys(p.x, p.z) : surfY(p.x, p.z);
+  const propY = (p) => p.y !== undefined ? p.y : (p.k === 'bus_stop' && T.deck(p.x, p.z) !== null) ? T.phys(p.x, p.z) : surfY(p.x, p.z);
   G.propY = propY;
   const inst = (geo, mat, list, f, shadow = true) => {
     if (!list.length) return null;
