@@ -97,6 +97,13 @@ G.buildWorld = async (status) => {
   const HW = D.half[0] + 40, HH = D.half[1] + 40;
   G.HW = HW; G.HH = HH;
   const rnd = G.mulberry(1964); // the year the university opened
+  // open spaces the OSM building outline wrongly covers, measured from aerial imagery (Esri World Imagery):
+  // the paved terrace in front of The Mill and the paved square east of it towards the Postgraduate Statistics Centre
+  const OPEN_SPACES = [
+    { n: 'Fylde College', rects: [[-50.4, -34.6, -18.5, -29.9], [-26.2, -51.2, -18.8, -29.9], [-46.5, -29.9, -33.3, -22.5]] },
+  ];
+  G._openSpaces = OPEN_SPACES;
+  for (const os of OPEN_SPACES) for (const [x0, z0, x1, z1] of os.rects) D.areas.push({ k: 'plaza', p: [x0, z0, x1, z0, x1, z1, x0, z1], n: os.n + ' (open)' });
   const T = G.T; T.initUnderpass(D.roads); const U = T.U;
   // a way that runs underground inside the Underpass box (vs. surface passages through buildings)
   const isUnder = (r) => { if (!(r.ly && +r.ly < 0) && !(r.lv && /^-1/.test(r.lv))) return false; const n = r.p.length / 2, k = Math.floor(n / 2) * 2; return T.deck(r.p[k], r.p[k + 1], 1) !== null; };
@@ -673,6 +680,13 @@ G.buildWorld = async (status) => {
   // buildings drawn over ground you can walk on (paths, courtyards, covered walkways): rebuild the drawn shape from
   // the collision map so nothing visually blocks a walkable path. Open ground is removed outright; mapped covered
   // walkways (OSM covered / tunnel) keep the floors above as a roof ~3 m over the path.
+  // open the measured open spaces: only cells of the named building are cleared (neighbours untouched); the
+  // rebuild below then redraws that building from the collision map without them
+  for (const os of OPEN_SPACES) {
+    const bld = D.buildings.find((x) => x.n === os.n); if (!bld) continue;
+    for (const [x0, z0, x1, z1] of os.rects) for (let z = z0 + 0.25; z < z1; z += 0.5) for (let x = x0 + 0.25; x < x1; x += 0.5)
+      if (grid.get(x, z) === G.BUILDING && G.pip(x, z, bld.p)) grid.set(x, z, G.FREE);
+  }
   {
     const cover = new G.Grid(HW, HH, 1.0);
     for (const r of D.roads) if (r.tu && !isUnder(r)) cover.stroke(r.p, Math.max(2.4, r.w + 0.4), 1);
@@ -681,9 +695,12 @@ G.buildWorld = async (status) => {
     G._rebuilt = [];
     for (const b of allB) {
       if (b._bridge || b.mh > 0 || b.t === 'roof' || b._fill) { out.push(b); continue; }
-      const inside = (x, z) => G.pip(x, z, b.p) && !(b.hl && b.hl.some((h) => G.pip(x, z, h)));
+      // a courtyard hole that a cut has turned into a notch (some of its corners on/outside the outline) can't be
+      // drawn as a hole, so the courtyard gets filled in: rebuild those pieces from the collision map too
+      const brokenHole = (b.hl || []).some((h) => { for (let k = 0; k < h.length; k += 2) if (!G.pip(h[k], h[k + 1], b.p)) return true; return false; });
+      const inside = brokenHole ? (x, z) => G.pip(x, z, b.p) : (x, z) => G.pip(x, z, b.p) && !(b.hl && b.hl.some((h) => G.pip(x, z, h)));
       const [x0, z0, x1, z1] = G.bbox(b.p);
-      let hidden = 0;
+      let hidden = brokenHole ? 2 : 0;
       for (let z = z0 + 0.25; z < z1 && hidden < 2; z += C) for (let x = x0 + 0.25; x < x1; x += C) {
         if (solidAt(x, z) || !inside(x, z)) continue;
         if (inside(x + 0.35, z) && inside(x - 0.35, z) && inside(x, z + 0.35) && inside(x, z - 0.35)) { if (++hidden >= 2) break; }
