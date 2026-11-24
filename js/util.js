@@ -149,3 +149,38 @@ G.Buckets = class {
     return out;
   }
 };
+
+// Trace a 0/1 cell mask (nx*nz, cell size C, origin ox/oz) into polygons with holes: [{ p, hl }]
+G.traceMask = (M, nx, nz, ox, oz, C, tol = 0.25, minArea = 1) => {
+  const edges = new Map(), key = (i, j) => i * 100000 + j;
+  const addE = (i0, j0, i1, j1) => { const k = key(i0, j0); if (!edges.has(k)) edges.set(k, []); edges.get(k).push([i1, j1]); };
+  const at = (i, j) => (i < 0 || j < 0 || i >= nx || j >= nz ? 0 : M[j * nx + i]);
+  for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { if (!M[j * nx + i]) continue;
+    if (!at(i, j - 1)) addE(i, j, i + 1, j); if (!at(i + 1, j)) addE(i + 1, j, i + 1, j + 1);
+    if (!at(i, j + 1)) addE(i + 1, j + 1, i, j + 1); if (!at(i - 1, j)) addE(i, j + 1, i, j); }
+  const loops = [];
+  for (const [k0] of edges) { while (edges.get(k0) && edges.get(k0).length) {
+    let ci = Math.floor(k0 / 100000), cj = k0 % 100000; const loop = [];
+    for (let g = 0; g < 1000000; g++) { const lst = edges.get(key(ci, cj)); if (!lst || !lst.length) break; const [ni, nj] = lst.pop(); loop.push(ci, cj); ci = ni; cj = nj; if (key(ci, cj) === k0) break; }
+    if (loop.length >= 8) loops.push(loop);
+  } }
+  const dp = (pts) => {
+    const n = pts.length / 2; if (n < 4) return pts; const keep = new Uint8Array(n); keep[0] = keep[n - 1] = 1; const st = [[0, n - 1]];
+    while (st.length) { const [a, c] = st.pop(); let md = 0, mi = -1; const ax = pts[a * 2], az = pts[a * 2 + 1], cx = pts[c * 2], cz = pts[c * 2 + 1], L = Math.hypot(cx - ax, cz - az) || 1;
+      for (let i = a + 1; i < c; i++) { const d = Math.abs((cx - ax) * (az - pts[i * 2 + 1]) - (ax - pts[i * 2]) * (cz - az)) / L; if (d > md) { md = d; mi = i; } }
+      if (md > tol) { keep[mi] = 1; st.push([a, mi], [mi, c]); } }
+    const out = []; for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i * 2], pts[i * 2 + 1]); return out;
+  };
+  const rings = loops.map((lp) => {
+    const w = []; for (let k = 0; k < lp.length; k += 2) w.push(ox + lp[k] * C, oz + lp[k + 1] * C);
+    const n = w.length / 2; let far = 0, fd = 0; for (let i = 1; i < n; i++) { const d = Math.hypot(w[i * 2] - w[0], w[i * 2 + 1] - w[1]); if (d > fd) { fd = d; far = i; } }
+    const a = dp(w.slice(0, far * 2 + 2)), c = dp([...w.slice(far * 2), w[0], w[1]]);
+    return [...a.slice(0, -2), ...c.slice(0, -2)];
+  }).filter((r) => r.length >= 6 && Math.abs(G.polyArea(r)) > 0.2);
+  // in this edge orientation outer rings and holes have opposite signs; outers are the sign of the largest ring
+  if (!rings.length) return [];
+  const big = rings.reduce((m, r) => (Math.abs(G.polyArea(r)) > Math.abs(G.polyArea(m)) ? r : m));
+  const sign = Math.sign(G.polyArea(big));
+  const outers = rings.filter((r) => Math.sign(G.polyArea(r)) === sign && Math.abs(G.polyArea(r)) >= minArea), holes = rings.filter((r) => Math.sign(G.polyArea(r)) !== sign);
+  return outers.map((o) => ({ p: o, hl: holes.filter((h) => G.pip(h[0], h[1], o)) }));
+};

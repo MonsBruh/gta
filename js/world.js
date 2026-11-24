@@ -670,6 +670,39 @@ G.buildWorld = async (status) => {
       if (d[k - 1] !== G.BUILDING && d[k + 1] !== G.BUILDING && d[k - W2] !== G.BUILDING && d[k + W2] !== G.BUILDING) d[k] = G.FREE;
     }
   }
+  // buildings drawn over ground you can walk on (paths, courtyards, covered walkways): rebuild the drawn shape from
+  // the collision map so nothing visually blocks a walkable path. Open ground is removed outright; mapped covered
+  // walkways (OSM covered / tunnel) keep the floors above as a roof ~3 m over the path.
+  {
+    const cover = new G.Grid(HW, HH, 1.0);
+    for (const r of D.roads) if (r.tu && !isUnder(r)) cover.stroke(r.p, Math.max(2.4, r.w + 0.4), 1);
+    const solidAt = (x, z) => grid.get(x, z) === G.BUILDING || (G.RAMP.ok && G.RAMP.deckAt(x, z) !== null);
+    const C = 0.5, out = [];
+    G._rebuilt = [];
+    for (const b of allB) {
+      if (b._bridge || b.mh > 0 || b.t === 'roof' || b._fill) { out.push(b); continue; }
+      const inside = (x, z) => G.pip(x, z, b.p) && !(b.hl && b.hl.some((h) => G.pip(x, z, h)));
+      const [x0, z0, x1, z1] = G.bbox(b.p);
+      let hidden = 0;
+      for (let z = z0 + 0.25; z < z1 && hidden < 2; z += C) for (let x = x0 + 0.25; x < x1; x += C) {
+        if (solidAt(x, z) || !inside(x, z)) continue;
+        if (inside(x + 0.35, z) && inside(x - 0.35, z) && inside(x, z + 0.35) && inside(x, z - 0.35)) { if (++hidden >= 2) break; }
+      }
+      if (hidden < 2) { out.push(b); continue; }
+      const ox = Math.floor(x0) - 1, oz = Math.floor(z0) - 1, nx = Math.ceil((x1 - ox) / C) + 2, nz = Math.ceil((z1 - oz) / C) + 2;
+      const Ms = new Uint8Array(nx * nz), Mc = new Uint8Array(nx * nz); let gmax = -Infinity;
+      for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+        const x = ox + (i + 0.5) * C, z = oz + (j + 0.5) * C; if (!inside(x, z)) continue;
+        if (solidAt(x, z)) Ms[j * nx + i] = 1;
+        else if (cover.get(x, z) === 1) { Mc[j * nx + i] = 1; gmax = Math.max(gmax, G.groundAt(x, z)); }
+      }
+      const base = { ...b, _src: b._src || b, _cuts: undefined, _orig: undefined, _rebuilt: true };
+      for (const pc of G.traceMask(Ms, nx, nz, ox, oz, C, 0.1, 1.5)) out.push({ ...base, p: pc.p, hl: pc.hl });
+      for (const pc of G.traceMask(Mc, nx, nz, ox, oz, C, 0.1, 1.5)) out.push({ ...base, p: pc.p, hl: pc.hl, _bridge: true, _bottom: gmax + 3.1 });
+      G._rebuilt.push((b._src || b).n || b.t);
+    }
+    allB.length = 0; allB.push(...out);
+  }
   G._rendered = allB;
   for (const b of allB) {
     const r = G.mulberry(G.hash(b.p.join(',').slice(0, 40)));
