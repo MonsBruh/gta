@@ -55,11 +55,41 @@ R.locate = (x, z) => {
   }
   return loc;
 };
-// deck surface height, or null if not over the deck
-R.deckAt = (x, z) => {
+// branches: walkways leaving the deck and sloping down at one constant gradient (e.g. the path to the passage)
+R.branches = [];
+G.addRampBranch = (pts, width, y0, y1, width1) => {
+  const segs = []; let L = 0;
+  for (let k = 0; k + 3 < pts.length; k += 2) { const ax = pts[k], az = pts[k + 1], bx = pts[k + 2], bz = pts[k + 3], l = Math.hypot(bx - ax, bz - az); segs.push({ ax, az, bx, bz, l, s0: L, ux: (bx - ax) / l, uz: (bz - az) / l }); L += l; }
+  const w1 = width1 !== undefined ? width1 : width, wm = Math.max(width, w1);
+  const bb = G.bbox(pts), br = { pts, segs, L, w: wm, y0, y1, bb: [bb[0] - wm, bb[1] - wm, bb[2] + wm, bb[3] + wm] };
+  br.y = (s) => y0 + (y1 - y0) * G.clamp(s / L, 0, 1);
+  br.wAt = (s) => width + (w1 - width) * G.clamp(s / L, 0, 1);
+  br.at = (s) => { s = G.clamp(s, 0, L); let g = segs[segs.length - 1]; for (const q of segs) if (s <= q.s0 + q.l) { g = q; break; } const k = (s - g.s0) / g.l; return { x: g.ax + (g.bx - g.ax) * k, z: g.az + (g.bz - g.az) * k, ux: g.ux, uz: g.uz, nx: -g.uz, nz: g.ux }; };
+  R.branches.push(br); if (R.ok) { R.bb[0] = Math.min(R.bb[0], br.bb[0]); R.bb[1] = Math.min(R.bb[1], br.bb[1]); R.bb[2] = Math.max(R.bb[2], br.bb[2]); R.bb[3] = Math.max(R.bb[3], br.bb[3]); }
+  return br;
+};
+const branchAt = (x, z) => {
+  let best = null;
+  for (const br of R.branches) {
+    if (x < br.bb[0] || x > br.bb[2] || z < br.bb[1] || z > br.bb[3]) continue;
+    for (const g of br.segs) {
+      const u = (x - g.ax) * g.ux + (z - g.az) * g.uz; if (u < -0.01 || u > g.l + 0.01) continue;
+      const sb = g.s0 + G.clamp(u, 0, g.l), d = Math.abs((x - g.ax) * -g.uz + (z - g.az) * g.ux); if (d > br.wAt(sb) / 2) continue;
+      const y = br.y(sb); if (best === null || y > best) best = y;
+    }
+  }
+  return best;
+};
+R.branchAt = branchAt;
+// deck surface height, or null if not over the deck (main ramp or a branch; the higher where they overlap)
+R.mainAt = (x, z) => {
   const l = R.locate(x, z); if (!l || l.s <= 0.01 || l.s >= R.L - 0.01) return null;
   if (l.t > IN_W || l.t < -R.outW(l.s)) return null;
   return R.y(l.s);
+};
+R.deckAt = (x, z) => {
+  const m = R.mainAt(x, z), b = R.branches.length ? branchAt(x, z) : null;
+  return m === null ? b : b === null ? m : Math.max(m, b);
 };
 // inside the curve (closed by the straight line between the ends)?
 const insideU = (x, z) => G.pip(x, z, R.pts);
@@ -125,8 +155,10 @@ G.placeRampShops = (list) => {
 G.rampGrid = (grid) => {
   for (let s = 0.2; s < R.L - 0.1; s += 0.25) {
     const a = R.at(s);
-    for (let t = -R.outW(s); t <= IN_W; t += 0.25) grid.set(a.x + a.nx * t, a.z + a.nz * t, G.BUILDING);
+    for (let t = -R.outW(s) + 0.3; t <= IN_W; t += 0.25) grid.set(a.x + a.nx * t, a.z + a.nz * t, G.BUILDING);
   }
+  // (kept just inside the walkable surface so the solid part never pokes out past it)
+  for (const br of R.branches) for (let s = 0; s <= br.L - 0.6; s += 0.25) { const a = br.at(s), hw = br.wAt(s) / 2; for (let t = -hw + 0.35; t <= hw - 0.35; t += 0.25) grid.set(a.x + a.nx * t, a.z + a.nz * t, G.BUILDING); }
 };
 
 // --- geometry
@@ -137,6 +169,11 @@ G.buildRamp = () => {
   const P = (s, t, y) => { const a = R.at(s); return [a.x + a.nx * t, y, a.z + a.nz * t]; };
   const inShop = (s) => R.shops.find((sh) => s >= sh.s0 - 1e-6 && s <= sh.s1 + 1e-6);
   const STEP = 0.5;
+  const railing = (x0, z0, x1, z1, y0, y1, seg) => {
+    B.box(x0, z0, x1, z1, 0.06, y0 + 0.96, y1 + 1.04, rail); B.box(x0, z0, x1, z1, 0.04, y0 + 0.48, y1 + 0.53, rail);
+    if (seg % 3 === 0) B.box(x0, z0, x0 + (x1 - x0) * 0.12, z0 + (z1 - z0) * 0.12, 0.06, y0, y0 + 1.0, rail);
+  };
+  let segN = 0;
   for (let s = 0; s < R.L - 1e-6; s += STEP) {
     const s2 = Math.min(R.L, s + STEP), ya = R.y(s), yb = R.y(s2), oa = -R.outW(s), ob = -R.outW(s2);
     // deck top
@@ -165,8 +202,10 @@ G.buildRamp = () => {
       for (let r = 0; r < 3; r++) B.box(w0[0], w0[2], w1[0], w1[2], 0.5, bA + 0.5 + r * 0.55, bA + 0.75 + r * 0.55, hex(['#d23c3c', '#e0b23a', '#3c8fd2', '#4fae5a'][(k + r) % 4]));
     }
     // railings along both edges where there's a drop
-    if (ya - (fa + 0.3) > 0.9) B.box(...[P(s, IN_W - 0.08, 0), P(s2, IN_W - 0.08, 0)].flatMap((p) => [p[0], p[2]]), 0.06, ya, ya + 1.05, rail);
-    if (ya - (ga + 0.3) > 0.9) B.box(...[P(s, oa + 0.08, 0), P(s2, ob + 0.08, 0)].flatMap((p) => [p[0], p[2]]), 0.06, ya, ya + 1.05, rail);
+    segN++;
+    if (ya - (fa + 0.3) > 0.9) railing(...[P(s, IN_W - 0.08, 0), P(s2, IN_W - 0.08, 0)].flatMap((p) => [p[0], p[2]]), ya, yb, segN);
+    const joined = R.branches.length && branchAt(...[P(s, oa - 0.4, 0)].map((p) => [p[0], p[2]])[0]) !== null;
+    if (!joined && ya - (ga + 0.3) > 0.9) railing(...[P(s, oa + 0.08, 0), P(s2, ob + 0.08, 0)].flatMap((p) => [p[0], p[2]]), ya, yb, segN);
   }
   // shop side walls (between units / at their ends) and piers, signs, lights
   const signTex = (text, bg, fg, aspect) => {
@@ -188,6 +227,21 @@ G.buildRamp = () => {
     sign.position.set(a.x + a.nx * (IN_W + 0.05), y, a.z + a.nz * (IN_W + 0.05)); sign.rotation.y = Math.atan2(a.nx, a.nz); G.scene.add(sign);
     const lp = new THREE.Mesh(new THREE.PlaneGeometry(sw * 0.6, 0.5), new THREE.MeshBasicMaterial({ color: 0xfff1d0 }));
     lp.position.set(a.x + a.nx * (IN_W - SHOP_DEPTH / 2), R.y(sm) - SLAB - 0.03, a.z + a.nz * (IN_W - SHOP_DEPTH / 2)); lp.rotation.x = Math.PI / 2; lp.rotation.z = -Math.atan2(a.nx, a.nz); G.scene.add(lp);
+  }
+  // branches: sloping walkway with side walls down to the ground, railing only where it's high
+  for (const br of R.branches) {
+    for (let s = 0; s < br.L - 1e-6; s += 0.5) {
+      const s2 = Math.min(br.L, s + 0.5), a = br.at(s), b = br.at(s2), ya = br.y(s) - 0.005, yb = br.y(s2) - 0.005, h = br.wAt(s) / 2, h2 = br.wAt(s2) / 2;
+      const L0 = [a.x - a.nx * h, a.z - a.nz * h], R0 = [a.x + a.nx * h, a.z + a.nz * h], L1 = [b.x - b.nx * h2, b.z - b.nz * h2], R1 = [b.x + b.nx * h2, b.z + b.nz * h2];
+      B.quad([L0[0], ya, L0[1]], [L1[0], yb, L1[1]], [R1[0], yb, R1[1]], [R0[0], ya, R0[1]], null, paving);
+      for (const [p0, p1] of [[L0, L1], [R0, R1]]) {
+        const g0 = G.groundAt(p0[0] + (p0[0] - a.x) * 0.15, p0[1] + (p0[1] - a.z) * 0.15, -1e4) - 0.2, g1 = G.groundAt(p1[0] + (p1[0] - b.x) * 0.15, p1[1] + (p1[1] - b.z) * 0.15, -1e4) - 0.2;
+        if (ya - g0 > 0.05 || yb - g1 > 0.05) B.quad([p0[0], g0, p0[1]], [p1[0], g1, p1[1]], [p1[0], yb, p1[1]], [p0[0], ya, p0[1]], null, stone);
+        if (R.mainAt(p0[0], p0[1]) === null && ya - (g0 + 0.2) > 0.9) railing(p0[0], p0[1], p1[0], p1[1], ya, yb, Math.round(s * 2));
+      }
+    }
+    const e = br.at(br.L), h = br.wAt(br.L) / 2, ge = G.groundAt(e.x, e.z, -1e4) - 0.2;
+    if (br.y1 - ge > 0.25) B.quad([e.x - e.nx * h, ge, e.z - e.nz * h], [e.x + e.nx * h, ge, e.z + e.nz * h], [e.x + e.nx * h, br.y1, e.z + e.nz * h], [e.x - e.nx * h, br.y1, e.z - e.nz * h], null, stone);
   }
   // end caps
   for (const se of [0, R.L]) { const y = R.y(se), o = -R.outW(se), a = P(se, o, 0), b = P(se, IN_W, 0); B.quad(P(se, o, T.base(a[0], a[2]) - 0.3), P(se, IN_W, G.groundAt(b[0], b[2], -1e4) - 0.3), P(se, IN_W, y), P(se, o, y), null, stone); }
