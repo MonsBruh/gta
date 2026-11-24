@@ -190,12 +190,29 @@ G.placeRampShops = (list) => {
 
 // --- collision: the deck footprint is solid underneath (shops / structure), walkable on top
 G.rampGrid = (grid) => {
-  for (let s = 0.2; s < R.L - 0.1; s += 0.25) {
-    const a = R.at(s);
-    for (let t = -R.outW(s) + 0.3; t <= IN_W; t += 0.25) grid.set(a.x + a.nx * t, a.z + a.nz * t, G.BUILDING);
+  R.cells = new G.Grid(G.HW, G.HH, grid.cell);
+  // solid only where the drawn deck actually is (every 0.5 m cell centre tested against the deck itself),
+  // so nothing invisible sticks out past its edges or its low end
+  const C = grid.cell, [x0, z0, x1, z1] = R.bb;
+  for (let z = Math.floor(z0 / C) * C + C / 2; z <= z1; z += C) for (let x = Math.floor(x0 / C) * C + C / 2; x <= x1; x += C) {
+    if (R.deckAt(x, z) === null) continue;
+    // the solid part is the structure under the deck; where the deck is at ground level there's nothing to hit
+    if (R.deckAt(x, z) - G.T.base(x, z) < 0.6) continue;
+    grid.set(x, z, G.BUILDING); R.cells.set(x, z, 1);
   }
-  // (kept just inside the walkable surface so the solid part never pokes out past it)
-  for (const br of R.branches) for (let s = 0; s <= br.L - 0.6; s += 0.25) { const a = br.at(s), hw = br.wAt(s) / 2; for (let t = -hw + 0.35; t <= hw - 0.35; t += 0.25) grid.set(a.x + a.nx * t, a.z + a.nz * t, G.BUILDING); }
+};
+// the structure under the deck only blocks you if you're below the deck (never someone walking on it / stepping off)
+G.rampCellSolid = (x, z, y) => {
+  const C = R.cells.cell, cx = Math.floor((x - R.cells.ox) / C) * C + R.cells.ox + C / 2, cz = Math.floor((z - R.cells.oz) / C) * C + R.cells.oz + C / 2;
+  const d = R.deckAt(cx, cz); return d !== null && y < d - 0.6;
+};
+// railings: a real barrier only where one is drawn (a drop of over ~1 m off the deck's edge)
+G.rampRail = (x, z, y) => {
+  if (!R.ok || x < R.bb[0] || x > R.bb[2] || z < R.bb[1] || z > R.bb[3]) return false;
+  if (R.deckAt(x, z) !== null) return false;                       // still on the deck
+  const g = G.T.phys(x, z); if (y - g < 0.9) return false;         // small step down: just walk off (railings are drawn from 0.9 m)
+  for (let a = 0; a < 8; a++) { const d = R.deckAt(x + Math.cos(a * 0.785) * 0.45, z + Math.sin(a * 0.785) * 0.45); if (d !== null && Math.abs(d - y) < 0.6) return true; }
+  return false;
 };
 
 // --- geometry
